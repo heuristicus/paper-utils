@@ -53,9 +53,13 @@ class CitationGroup(object):
 
         self.compute_sequences()
 
-    def compute_sequences(self, min_length=2):
-        # 3-tuple, sequence length, start line, end line
+    def compute_sequences(self, min_length=3):
         self.increasing_sequences = []
+        print(self.all_citations)
+        if len(self.all_citations) < 2:
+            return
+
+        # 3-tuple, sequence length, start line, end line
         start_ind = 0 # this starting index means that the first sequence is one shorter than it should be?
         start_line = self.all_citations[0][1]
 
@@ -63,20 +67,29 @@ class CitationGroup(object):
             # indexing into the original list with ind will give us the previous
             # item, since we are slicing the enumerated list from 1.
             if self.all_citations[ind][0] <= item[0]:
+                print("starting sequence at {}".format(item))
                 if not start_ind:
                     start_ind = ind
                     start_line = item[1]
             else:
-                if start_ind and ind+1 - start_ind > 2:
+                if start_ind and ind+1 - start_ind > min_length:
                     add_tuple = (ind+1-start_ind, start_line, item[1])
                     # citations per line, might be useful
-                    cpl = (ind-start_ind)/float(item[1]-start_line)
+                    if item[1] == start_line: # the sequence ends on a single line
+                        cpl = ind-start_ind
+                    else:
+                        cpl = (ind-start_ind)/float(item[1]-start_line)
                     self.increasing_sequences.append((ind-start_ind, start_line, item[1], cpl))
+
                 start_ind = None # reset start ind so we know the sequence ended
 
-        # Add the final sequence
-        cpl = (len(self.all_citations)-start_ind)/float(self.all_citations[-1][1]-start_line)
-        self.increasing_sequences.append((len(self.all_citations)-start_ind, start_line, self.all_citations[-1][1], cpl))
+        # only if the last sequence starts with an element in the list before
+        # the last one. start_ind is none if there is no sequence to be
+        # finalised
+        if not start_line == self.all_citations[-1][1] and start_ind is not None:
+            # Add the final sequence
+            cpl = (len(self.all_citations)-start_ind)/float(self.all_citations[-1][1]-start_line)
+            self.increasing_sequences.append((len(self.all_citations)-start_ind, start_line, self.all_citations[-1][1], cpl))
 
 def main():
 
