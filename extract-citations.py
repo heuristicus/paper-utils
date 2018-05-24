@@ -12,13 +12,9 @@ class CitationType(Enum):
     SQUARE=1
     DOTTED=2
     PLAIN=3
+    TRIGRAPH=4
 
 class CitationGroup(object):
-    # regex for citation-like things starting at the beginning of a line, which
-    # have length greater than 5 after the citation block (i.e. after [1]),
-    # which may indicate a citation. This doesn't work if the citation block and
-    # the text of the citation have been separated by the pdf->text conversion
-    linestart_re = re.compile("^\[*[0-9]+(\]|\.).{5,}")
     # Gets all citations which are enclosed within square brackets
     citation_re = re.compile("\[([0-9]+)\]")
     # Some papers have citations in the form "1. " followed by the citation
@@ -27,7 +23,17 @@ class CitationGroup(object):
     # numbers are separated from the text, in which case they will be alone on a
     # line with the end of the line directly after the period. If not, a space
     # will separate the number and the citation text.
-    dotted_citation_re = re.compile("^([0-9]{1,3})\.( |$)")
+    dotted_citation_re = re.compile("^([0-9]{1,3})\.(\s*|$)")
+
+    # Some citations in the text itself will be in the form of (surname et al.
+    # 2001b; surname and other 1999), this captures those (these are quite rare
+    # though)
+    named_re = re.compile("\(((?:[a-zA-Z0-9 \n\.,]+(?:[0-9]{4}[a-z]*)+[; ]*)+)\)")
+
+    # The AMS authorship trigraph takes the form [FS+90, AB+91]. Assume that
+    # they are usually comma separated if multiple citations in same bracket
+    # pair
+    trigraph_re = re.compile("\[((?:[A-Z+]+[0-9]{2}[, ]*)+)\]")
 
     # Some papers have end material which we should make sure to ignore when
     # looking at the references, these strings often appear at the start of
@@ -41,16 +47,18 @@ class CitationGroup(object):
         self.references_end = 0
         self.end_material_lines = []
         self.max_citation_num = 0
-        self.matching = []
         # Contains all found citations, with 2-tuple containing citation number and line number
         self.square_citations = []
         self.dotted_citations = []
+        self.named_citations = []
+        self.trigraph_citations = []
         self.all_citations = []
 
         with open(fname) as f:
             for lineno, line in enumerate(f):
+                lineno += 1 # enumeration starts at zero
                 # sometimes the r and eferences get separated by a space (like, in a lot of cases)
-                if "references" in line.lower():
+                if "references" in line.lower() and len(line) < len("references") + 5:
                     self.references_start = lineno
 
                 # try to get some information about possible supplementary
@@ -64,25 +72,43 @@ class CitationGroup(object):
                     if end_string in line.lower() and len(line) < len(end_string) + 10:
                         self.end_material_lines.append(lineno)
 
-                # ignore short lines, usually just numbers from tables. But
-                # sometimes the text conversion puts citation brackets in the
-                # reference section onto their own lines separate from the
-                # actual citation text
-                if len(line) > 5 and self.linestart_re.match(line):
-                    self.matching.append((lineno, line))
-
                 # Look for all square bracket citations in a line, and add the
                 # line number to the list for each one found
                 for match in self.citation_re.finditer(line):
-                    self.square_citations.append((int(match.group(1)), lineno))
+                    citation_number = int(match.group(1))
+                    self.square_citations.append((citation_number, lineno))
                     # Also check the number of the citation so we can know how
                     # many citations there are in the paper
-                    if int(match.group(1)) > int(self.max_citation_num):
-                        self.max_citation_num = int(match.group(1))
+                    if citation_number > self.max_citation_num:
+                        self.max_citation_num = citation_number
+
+                for match in self.trigraph_re.finditer(line):
+                    self.trigraph_citations.append((match.group(1), lineno))
 
                 dotted = self.dotted_citation_re.match(line)
                 if dotted:
+                    citation_number = int(dotted.group(1))
                     self.dotted_citations.append((int(dotted.group(1)), lineno))
+                    if citation_number > self.max_citation_num:
+                        self.max_citation_num = citation_number
+
+            # Named matches span lines, so need to do a search over the full document rather than lines
+            if not self.dotted_citations or not self.square_citations or not self.trigraph_citations:
+                f.seek(0)
+                for match in self.named_re.finditer(f.read()):
+                    self.named_citations.append((match.group(1), lineno))
+
+        # If there are no citations to be found after the start of the
+        # references, then it's likely that the citations are in plain style
+        all_tmp = sorted(self.dotted_citations + self.square_citations, key=operator.itemgetter(1))
+        if self.named_citations:
+            # We do not compute a sequence for named citations as the regex does
+            # not match the references section
+            for item in self.named_citations:
+                print(item[0].replace("\n", '').split('; '))
+
+            self.all_citations = all_tmp
+            self.citation_type = CitationType.PLAIN
 
         # Dotted citations are relatively rare, most papers use square brackets.
         # If they are used, then they only appear in the references section
@@ -90,14 +116,28 @@ class CitationGroup(object):
         # of citations are just noise. Some papers with low max citation counts
         # might have a weird effect, so assume that if there aren't more than 10
         # dotted citations that this is a paper with square citations
-        if len(self.dotted_citations) < max(self.max_citation_num/2, 10):
+        elif len(self.dotted_citations) < max(self.max_citation_num/2, 10):
             self.all_citations = self.square_citations
             self.citation_type = CitationType.SQUARE
-        else:
-            self.all_citations = sorted(self.dotted_citations + self.square_citations, key=operator.itemgetter(1))
-            self.citation_type = CitationType.DOTTED
+            self.compute_sequences()
+        elif self.trigraph_citations:
+            # Trigraph and named citations do not contain information about the
+            # number of citations which exist, so for consistency we must convert
+            # the values we saw
+            # Trigraph citations are not grouped
+            tri_set = set()
+            for item in self.trigraph_citations:
+                tri_set.update(item[0].split(', '))
 
-        self.compute_sequences()
+            self.max_citation_number = len(tri_set)
+            self.all_citations = self.trigraph_citations
+            self.citation_type = CitationType.TRIGRAPH
+            self.compute_sequences(ignore_number=True)
+        else:
+            self.all_citations = all_tmp
+            self.citation_type = CitationType.DOTTED
+            self.compute_sequences()
+
         self._get_references_end()
         self._get_references_text()
 
@@ -106,20 +146,26 @@ class CitationGroup(object):
         str_rep += self.name + "\n"
         str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_end)
         str_rep += "Total citations: {}\n".format(self.max_citation_num)
-        str_rep += "Square refs: {}, dotted refs: {}\n".format(len(self.square_citations), len(self.dotted_citations))
+        str_rep += "Citation type seems to be {}\n".format(self.citation_type)
+        str_rep += "Increasing sequences:\n {}\n".format(self.increasing_sequences)
+        str_rep += "Square refs: {}, dotted refs: {}, named refs: {}, trigraph refs: {}\n".format(len(self.square_citations), len(self.dotted_citations), len(self.named_citations), len(self.trigraph_citations))
 
         return str_rep
 
-    def compute_sequences(self, min_length=3, max_gap=8):
+    def compute_sequences(self, min_length=3, max_gap=8, ignore_number=False):
         """min_length is the minimum sequence length that will be considered
 
         max_gap is the maximum gap between two citations. We want to use this
         function to extract references from the references section rather than
         the body of the paper, and those tend to be pretty close to each other.
 
+        ignore_number will just use the gap and min length rather than looking
+        at the number of the citation to check if it is increasing. This is
+        useful for the trigraph type which isn't numbered
+
         """
         self.increasing_sequences = []
-        if len(self.square_citations) < 2:
+        if len(self.all_citations) < 2:
             return
 
         # 3-tuple, sequence length, start line, end line
@@ -132,7 +178,7 @@ class CitationGroup(object):
             prev_item = self.all_citations[ind]
             # Strictly less, because we really want to find sequences from the
             # references section which should be strictly increasing.
-            if prev_item[0] < item[0] and item[1] - prev_item[1] < max_gap:
+            if (ignore_number or prev_item[0] < item[0]) and item[1] - prev_item[1] < max_gap:
                 if not start_ind:
                     start_ind = ind-1
                     start_line = prev_item[1]
@@ -143,7 +189,7 @@ class CitationGroup(object):
                     if item[1] == start_line: # the sequence ends on a single line
                         cpl = num_lines
                     else:
-                        cpl = num_lines/float(item[1]-start_line)
+                        cpl = num_lines/float(prev_item[1]-start_line)
                     self.increasing_sequences.append((num_lines, start_line, prev_item[1], cpl))
 
                 start_ind = None # reset start ind so we know the sequence ended
@@ -211,7 +257,7 @@ def main():
     document_citations = []
 
     for fname in sys.argv[1:]:
-        #print("Processing {}".format(os.path.basename(fname)))
+        print("Processing {}".format(os.path.basename(fname)))
 
         citation_group = CitationGroup(fname)
 
@@ -220,13 +266,10 @@ def main():
     for d in document_citations:
         if not d.increasing_sequences or not d.all_citations:
             print("no sequence/citations found for {}".format(d.name))
-    print("papers with dotted citations:")
     for d in document_citations:
-        if d.end_material_lines:
-            print(d)
-            print(d.end_material_lines)
-            print(d._get_references_text())
-            print("--------------------------------------------------")
+        print(d)
+        print(d._get_references_text())
+        print("--------------------------------------------------")
 
 if __name__ == '__main__':
     main()
