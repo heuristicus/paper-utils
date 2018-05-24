@@ -29,11 +29,17 @@ class CitationGroup(object):
     # will separate the number and the citation text.
     dotted_citation_re = re.compile("^([0-9]{1,3})\.( |$)")
 
+    # Some papers have end material which we should make sure to ignore when
+    # looking at the references, these strings often appear at the start of
+    # those sections.
+    end_strings = ["appendix", "appendices", "supplementary"]
+
     def __init__(self, fname):
         self.name = os.path.basename(fname)
         self.fname = fname
         self.references_start = 0
         self.references_end = 0
+        self.end_material_lines = []
         self.max_citation_num = 0
         self.matching = []
         # Contains all found citations, with 2-tuple containing citation number and line number
@@ -46,6 +52,17 @@ class CitationGroup(object):
                 # sometimes the r and eferences get separated by a space (like, in a lot of cases)
                 if "references" in line.lower():
                     self.references_start = lineno
+
+                # try to get some information about possible supplementary
+                # material after the references
+                for end_string in self.end_strings:
+                    # The supplementary sections usually have a title which is
+                    # on its own line, so we might be able to ignore mentions in
+                    # references or other parts of the paper where lines will be
+                    # longer. This is usually only a problem with papers which
+                    # use a plain citation scheme
+                    if end_string in line.lower() and len(line) < len(end_string) + 10:
+                        self.end_material_lines.append(lineno)
 
                 # ignore short lines, usually just numbers from tables. But
                 # sometimes the text conversion puts citation brackets in the
@@ -166,7 +183,13 @@ class CitationGroup(object):
 
             lines_processed = 0
             # add a bit of padding so that we get the text of the last reference
-            lines_to_process = self.references_end - self.references_start + 5 if self.references_end else None
+            if self.references_end:
+                lines_to_process = self.references_end - self.references_start + 5
+            elif self.end_material_lines:
+                lines_to_process = max(self.end_material_lines) - self.references_start
+            else:
+                lines_to_process = None
+
             for line in f:
                 lines += line
                 lines_processed += 1
@@ -199,9 +222,11 @@ def main():
             print("no sequence/citations found for {}".format(d.name))
     print("papers with dotted citations:")
     for d in document_citations:
-        print(d)
-        print(d._get_references_text())
-        print("--------------------------------------------------")
+        if d.end_material_lines:
+            print(d)
+            print(d.end_material_lines)
+            print(d._get_references_text())
+            print("--------------------------------------------------")
 
 if __name__ == '__main__':
     main()
