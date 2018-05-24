@@ -175,10 +175,10 @@ class CitationGroup(object):
 
         return lines
 
-    def sequences_after_line(self, lineno):
+    def sequences_after_line(self, lineno, minlength=5):
         after = []
         for seq in sorted(self.increasing_sequences, key=operator.itemgetter(1)):
-            if lineno <= seq[1] or lineno <= seq[2]:
+            if (lineno <= seq[1] or lineno <= seq[2]) and seq[0] > minlength:
                 after.append(seq)
 
         return after
@@ -199,10 +199,9 @@ def main():
             print("no sequence/citations found for {}".format(d.name))
     print("papers with dotted citations:")
     for d in document_citations:
-        if d.citation_type == CitationType.DOTTED:
-            print(d)
-            print(d._get_references_text())
-            print("--------------------------------------------------")
+        print(d)
+        print(d._get_references_text())
+        print("--------------------------------------------------")
 
 if __name__ == '__main__':
     main()
