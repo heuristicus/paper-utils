@@ -4,6 +4,7 @@ import sys
 import os
 import re
 import string
+import math
 import operator
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,7 +13,7 @@ from enum import Enum
 class ReferenceType(Enum):
     SQUARE=1
     DOTTED=2
-    PLAIN=3
+    NAMED=3
     TRIGRAPH=4
 
 class ReferenceGroup(object):
@@ -33,6 +34,15 @@ class ReferenceGroup(object):
     # 2001b; surname and other 1999), this captures those (these are quite rare
     # though)
     named_re = re.compile("\(((?:[a-zA-Z0-9 \n\.,]+(?:[0-9]{4}[a-z]*)+[; ]*)+)\)")
+    # In the references section there is no easy way to determine where one
+    # reference starts and another begins, seems like the year might be one?
+    # Assume years are between 1900 and 2099
+    named_ref_re = re.compile("(\(*(?:19|20)[0-9]{2}[a-z]*\)*)")
+    # For some named ref documents, it can be more reliable to use the separator
+    # for authors, e.g. Bariya, P., and Zheng, S.; and Lowe, D. The last part of
+    # the or is necessary for single authors in the same scheme (sometimes)
+    author_sep_re = re.compile("(?:\.,|\.;|,[ a-zA-Z]{,3}\.)")
+
 
     # The AMS authorship trigraph takes the form [FS+90, AB+91]. Assume that
     # they are usually comma separated if multiple references in same bracket
@@ -62,10 +72,63 @@ class ReferenceGroup(object):
         # This will contain references once the process is finished
         self.references = []
 
-        with open(fname) as f:
+        # process the input file to extract some relevant bits
+        self._process_file()
+
+        # If we didn't get any references, then this document is probably one
+        # with named references, so need to handle things differently
+        if not self.dotted_references and not self.square_references and not self.trigraph_references:
+            self._process_file_named_references()
+            self.all_references = self.named_references
+            self.reference_type = ReferenceType.NAMED
+            self.compute_sequences(ignore_number=True)
+        elif self.trigraph_references:
+            # Trigraph and named references do not contain information about the
+            # number of references which exist, so for consistency we must convert
+            # the values we saw
+            # Trigraph references are not grouped
+            tri_set = set()
+            for item in self.trigraph_references:
+                tri_set.update(item[0].split(', '))
+
+            self.max_reference_number = len(tri_set)
+            self.all_references = self.trigraph_references
+            self.reference_type = ReferenceType.TRIGRAPH
+            self.compute_sequences(ignore_number=True)
+        elif len(self.dotted_references) > max(self.max_reference_num/2, 10):
+            # Dotted references are relatively rare, most papers use square brackets.
+            # If they are used, then they only appear in the references section
+            # Assume that any number of dotted references below half the total number
+            # of references are just noise. Some papers with low max reference counts
+            # might have a weird effect, so assume that if there aren't more than 10
+            # dotted references that this is a paper with square references
+            self.all_references = sorted(self.dotted_references + self.square_references, key=operator.itemgetter(1))
+            self.reference_type = ReferenceType.DOTTED
+            self.compute_sequences()
+        else:
+            self.all_references = self.square_references
+            self.reference_type = ReferenceType.SQUARE
+            self.compute_sequences()
+
+        self._get_references_end()
+        self._extract_references()
+
+    def __str__(self):
+        str_rep = ""
+        str_rep += self.name + "\n"
+        str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_end)
+        str_rep += "Total references: {}\n".format(self.max_reference_num)
+        str_rep += "Reference type seems to be {}\n".format(self.reference_type)
+        str_rep += "Increasing sequences:\n {}\n".format(self.increasing_sequences)
+        str_rep += "Square refs: {}, dotted refs: {}, named refs: {}, trigraph refs: {}\n".format(len(self.square_references), len(self.dotted_references), len(self.named_references), len(self.trigraph_references))
+
+        return str_rep
+
+    def _process_file(self):
+        with open(self.fname) as f:
             for lineno, line in enumerate(f):
                 lineno += 1 # enumeration starts at zero
-                # sometimes the r and eferences get separated by a space (like, in a lot of cases)
+                # crude method to extract the starting reference line, which works very well
                 if "references" in line.lower() and len(line) < len("references") + 5:
                     self.references_start = lineno
 
@@ -76,7 +139,7 @@ class ReferenceGroup(object):
                     # on its own line, so we might be able to ignore mentions in
                     # references or other parts of the paper where lines will be
                     # longer. This is usually only a problem with papers which
-                    # use a plain reference scheme
+                    # use a named reference scheme
                     if end_string in line.lower() and len(line) < len(end_string) + 10:
                         self.end_material_lines.append(lineno)
 
@@ -100,66 +163,60 @@ class ReferenceGroup(object):
                     if reference_number > self.max_reference_num:
                         self.max_reference_num = reference_number
 
-            # Named matches span lines, so need to do a search over the full document rather than lines
-            if not self.dotted_references or not self.square_references or not self.trigraph_references:
-                f.seek(0)
-                for match in self.named_re.finditer(f.read()):
-                    self.named_references.append((match.group(1), lineno))
+    def _process_file_named_references(self):
+        with open(self.fname) as f:
+            # First, extract the named references in the main text of the paper.
+            # These are extractable, but we need to do more to get the actual
+            # full references.
+            tmp_refs = []
+            for match in self.named_re.finditer(f.read()):
+                # match.start gives you the character in the file not the line number
+                tmp_refs.append((match.group(1), match.start()))
 
-        # If there are no references to be found after the start of the
-        # references, then it's likely that the references are in plain style
-        all_tmp = sorted(self.dotted_references + self.square_references, key=operator.itemgetter(1))
-        if self.named_references:
-            # We do not compute a sequence for named references as the regex does
-            # not match the references section
-            for item in self.named_references:
-                print(item[0].replace("\n", '').split('; '))
+            # The initial extraction will extract ; separated references, want
+            # to split them into their own ref
+            split_refs = []
+            for item in tmp_refs:
+                split = item[0].replace("\n", ' ').split('; ')
+                # If the split works, there is more than one ref in the group,
+                # so create new tuples for each with the same line
+                if len(split) > 1:
+                    split_refs.extend([(sp, item[1]) for sp in split])
+                else:
+                    split_refs.append((split, item[1]))
 
-            self.all_references = all_tmp
-            self.reference_type = ReferenceType.PLAIN
+            # need to go through the file again to get to the line where
+            # refs start. We also count the cumulative number of characters
+            # so that we can associate a character position with a specific
+            # line
+            file_linechars = []
+            end_refs = []
+            with open(self.fname) as f:
+                for lineno, line in enumerate(f):
+                    # need to get line length in bytes
+                    linelength_bytes = sys.getsizeof(line)
+                    file_linechars.append(linelength_bytes if lineno == 0 else file_linechars[lineno-1] + linelength_bytes)
+                    if lineno >= self.references_start:
+                        match = self.named_ref_re.search(line)
+                        if match:
+                            end_refs.append((line, lineno + 1))
 
-        # Dotted references are relatively rare, most papers use square brackets.
-        # If they are used, then they only appear in the references section
-        # Assume that any number of dotted references below half the total number
-        # of references are just noise. Some papers with low max reference counts
-        # might have a weird effect, so assume that if there aren't more than 10
-        # dotted references that this is a paper with square references
-        elif len(self.dotted_references) < max(self.max_reference_num/2, 10):
-            self.all_references = self.square_references
-            self.reference_type = ReferenceType.SQUARE
-            self.compute_sequences()
-        elif self.trigraph_references:
-            # Trigraph and named references do not contain information about the
-            # number of references which exist, so for consistency we must convert
-            # the values we saw
-            # Trigraph references are not grouped
-            tri_set = set()
-            for item in self.trigraph_references:
-                tri_set.update(item[0].split(', '))
+            # This is more approximate than for other types of references
+            self.max_reference_num = len(end_refs)
+                            
+            # Change the position in bytes to a position in lines for the
+            # references in the main text (i.e. not end refs)
+            line_refs = []
+            for item in split_refs:
+                # not super efficient
+                for lineno, cm_linechars in enumerate(file_linechars):
+                    if item[1] <= cm_linechars:
+                        line_refs.append((item[0], lineno + 1)) # +1, first line is index 1, enum from 0
+                        break
 
-            self.max_reference_number = len(tri_set)
-            self.all_references = self.trigraph_references
-            self.reference_type = ReferenceType.TRIGRAPH
-            self.compute_sequences(ignore_number=True)
-        else:
-            self.all_references = all_tmp
-            self.reference_type = ReferenceType.DOTTED
-            self.compute_sequences()
-
-        self._get_references_end()
-        self._extract_references()
-
-    def __str__(self):
-        str_rep = ""
-        str_rep += self.name + "\n"
-        str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_end)
-        str_rep += "Total references: {}\n".format(self.max_reference_num)
-        str_rep += "Reference type seems to be {}\n".format(self.reference_type)
-        str_rep += "Increasing sequences:\n {}\n".format(self.increasing_sequences)
-        str_rep += "Square refs: {}, dotted refs: {}, named refs: {}, trigraph refs: {}\n".format(len(self.square_references), len(self.dotted_references), len(self.named_references), len(self.trigraph_references))
-
-        return str_rep
-
+                    
+            self.named_references = line_refs + end_refs
+                        
     def compute_sequences(self, min_length=3, max_gap=8, ignore_number=False):
         """min_length is the minimum sequence length that will be considered
 
@@ -279,7 +336,8 @@ class ReferenceGroup(object):
         elif self.reference_type is ReferenceType.SQUARE:
             references = self.square_re.split(text_lines)
         else:
-            references = []
+            references = self._extract_references_named(text_lines)
+                
 
         for reference in references:
             if len(reference) > 20: # some junk gets created by regex sometimes
@@ -287,6 +345,48 @@ class ReferenceGroup(object):
                 clean = reference.replace("-\n", '')
                 # want to get the whole thing on one line
                 self.references.append(clean.replace("\n", ' '))
+
+    def _extract_references_named(self, text_lines, authsep_range=0.3):
+        """Named reference extraction is a bit more involved because the reference style
+        varies significantly
+
+        authsep_range if the number of lines with author separators on them is
+        within this percentage of the estimated maximum number of references, we
+        assume that we should use author separators to group references
+
+        """
+        splitlines = text_lines.split("\n")
+        # Check if it's better to use the author separators to get a good place
+        # to join. Assume at if the number of lines with author separators is
+        # quite close to the estimated total number of references then it's
+        # sensible to use that to split instead of another method
+        author_lines = []
+        cur_ref_start = 0
+        prev_line = 0
+        for lineno, line in enumerate(splitlines):
+            if self.author_sep_re.search(line):
+                if not author_lines: # first line with names is always appended
+                    cur_ref_start = lineno
+                    author_lines.append(lineno)
+                elif lineno - prev_line > 1:
+                    # if not first line, the line number has to be at least 2
+                    # bigger than the previous one. This squashes multiline author sections
+                    author_lines.append(lineno)
+
+                prev_line = lineno
+
+        use_authsep = abs(len(author_lines) - self.max_reference_num) < authsep_range * self.max_reference_num
+
+        if use_authsep:
+            end_refs = author_lines
+        else:
+            end_refs = [r[1]-self.references_start for r in self.all_references if r[1] > self.references_start]
+
+        refs = []
+        for ind, ref in enumerate(end_refs[1:]):
+            refs.append(" ".join(splitlines[end_refs[ind]:ref]))
+            
+        return refs
 
     def get_references_as_sets(self):
         """To match the references from various papers, it is useful to have them in a
@@ -321,10 +421,10 @@ def main():
         if not d.increasing_sequences or not d.all_references:
             print("no sequence/references found for {}".format(d.name))
     for d in document_references:
-        print(d)
-        print(d.increasing_sequences)
-        print(d.get_references_as_sets())
-        print("--------------------------------------------------")
+        if d.reference_type == ReferenceType.NAMED:
+            print(d)
+            print(d.get_references_as_sets())
+            print("--------------------------------------------------")
 
 if __name__ == '__main__':
     main()
