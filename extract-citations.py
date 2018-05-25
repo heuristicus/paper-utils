@@ -116,10 +116,9 @@ class ReferenceGroup(object):
     def __str__(self):
         str_rep = ""
         str_rep += self.name + "\n"
-        str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_end)
-        str_rep += "Total references: {}\n".format(self.max_reference_num)
+        str_rep += "References start at {}, end at {}\n".format(self.references_start, min(max(self.end_material_lines), self.references_end))
+        str_rep += "Total references: {}\n".format(len(self.references))
         str_rep += "Reference type seems to be {}\n".format(self.reference_type)
-        str_rep += "Increasing sequences:\n {}\n".format(self.increasing_sequences)
         str_rep += "Square refs: {}, dotted refs: {}, named refs: {}, trigraph refs: {}\n".format(len(self.square_references), len(self.dotted_references), len(self.named_references), len(self.trigraph_references))
 
         return str_rep
@@ -140,7 +139,7 @@ class ReferenceGroup(object):
                     # references or other parts of the paper where lines will be
                     # longer. This is usually only a problem with papers which
                     # use a named reference scheme
-                    if end_string in line.lower() and len(line) < len(end_string) + 10:
+                    if end_string in line.lower():
                         self.end_material_lines.append(lineno)
 
                 # Look for all square bracket references in a line, and add the
@@ -292,15 +291,17 @@ class ReferenceGroup(object):
                 if lines_processed >= self.references_start:
                     break
 
-            lines_processed = 0
-            # add a bit of padding so that we get the text of the last reference
-            if self.references_end:
-                lines_to_process = self.references_end - self.references_start + 5
+            if self.end_material_lines and self.references_end:
+                lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start
             elif self.end_material_lines:
                 lines_to_process = max(self.end_material_lines) - self.references_start
+            elif self.references_end:
+                # add a bit of padding so that we get the text of the last reference
+                lines_to_process = self.references_end - self.references_start + 5
             else:
                 lines_to_process = None
-
+                
+            lines_processed = 0
             for line in f:
                 lines += line
                 lines_processed += 1
@@ -384,7 +385,7 @@ class ReferenceGroup(object):
 
         refs = []
         for ind, ref in enumerate(end_refs[1:]):
-            refs.append(" ".join(splitlines[end_refs[ind]:ref]))
+            refs.append("\n".join(splitlines[end_refs[ind]:ref]))
             
         return refs
 
@@ -394,7 +395,7 @@ class ReferenceGroup(object):
         """
         set_rep = []
         for ref in self.references:
-            set_rep.append(set(ref.translate(None, ',.():').split(' ')))
+            set_rep.append(set(ref.translate(None, ',.():;').split(' ')))
 
         return set_rep
     
@@ -421,10 +422,10 @@ def main():
         if not d.increasing_sequences or not d.all_references:
             print("no sequence/references found for {}".format(d.name))
     for d in document_references:
-        if d.reference_type == ReferenceType.NAMED:
-            print(d)
-            print(d.get_references_as_sets())
-            print("--------------------------------------------------")
+        print(d)
+        for i, ref in enumerate(d.references):
+            print("{}: {}".format(i+1, ref))
+        print("--------------------------------------------------")
 
 if __name__ == '__main__':
     main()
