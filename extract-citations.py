@@ -3,6 +3,7 @@
 import sys
 import os
 import re
+import string
 import operator
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,14 +17,17 @@ class CitationType(Enum):
 
 class CitationGroup(object):
     # Gets all citations which are enclosed within square brackets
-    citation_re = re.compile("\[([0-9]+)\]")
+    square_re = re.compile("\[([0-9]+)\]")
     # Some papers have citations in the form "1. " followed by the citation
     # text. The citation number is assumed to be below 1000, which filters out
     # possible conflicts with years in the citation text. Sometimes the citation
     # numbers are separated from the text, in which case they will be alone on a
     # line with the end of the line directly after the period. If not, a space
     # will separate the number and the citation text.
-    dotted_citation_re = re.compile("^([0-9]{1,3})\.(\s*|$)")
+    dotted_re_string = "([0-9]{1,3})\.(\s+|$)"
+    dotted_re = re.compile("^" + dotted_re_string)
+    # need this to split a large string with regex
+    dotted_re_nonstart = re.compile(dotted_re_string)
 
     # Some citations in the text itself will be in the form of (surname et al.
     # 2001b; surname and other 1999), this captures those (these are quite rare
@@ -53,6 +57,10 @@ class CitationGroup(object):
         self.named_citations = []
         self.trigraph_citations = []
         self.all_citations = []
+        self.increasing_sequences = []
+
+        # This will contain references once the process is finished
+        self.references = []
 
         with open(fname) as f:
             for lineno, line in enumerate(f):
@@ -74,7 +82,7 @@ class CitationGroup(object):
 
                 # Look for all square bracket citations in a line, and add the
                 # line number to the list for each one found
-                for match in self.citation_re.finditer(line):
+                for match in self.square_re.finditer(line):
                     citation_number = int(match.group(1))
                     self.square_citations.append((citation_number, lineno))
                     # Also check the number of the citation so we can know how
@@ -85,7 +93,7 @@ class CitationGroup(object):
                 for match in self.trigraph_re.finditer(line):
                     self.trigraph_citations.append((match.group(1), lineno))
 
-                dotted = self.dotted_citation_re.match(line)
+                dotted = self.dotted_re.match(line)
                 if dotted:
                     citation_number = int(dotted.group(1))
                     self.dotted_citations.append((int(dotted.group(1)), lineno))
@@ -139,7 +147,7 @@ class CitationGroup(object):
             self.compute_sequences()
 
         self._get_references_end()
-        self._get_references_text()
+        self._extract_references()
 
     def __str__(self):
         str_rep = ""
@@ -186,7 +194,7 @@ class CitationGroup(object):
                 if start_ind and ind+1 - start_ind > min_length:
                     # citations per line, might be useful
                     num_lines = ind - start_ind
-                    if item[1] == start_line: # the sequence ends on a single line
+                    if prev_item[1] == start_line: # the sequence ends on a single line
                         cpl = num_lines
                     else:
                         cpl = num_lines/float(prev_item[1]-start_line)
@@ -244,6 +252,52 @@ class CitationGroup(object):
 
         return lines
 
+    def _extract_references(self):
+        text_lines = self._get_references_text()
+
+        if not text_lines:
+            return
+
+        # Get the line numbers of citations after the start of the reference
+        # block, and make the start line of the reference block 0. -1 because
+        # when constructing we start line numbers at 1 as with files, but
+        # here we want array indices
+        # citation_lines = [citation[1] - self.references_start - 1 for citation in sorted(self.all_citations, key=operator.itemgetter(1)) if citation[1] >= self.references_start]
+
+        # for ind, lineno in enumerate(citation_lines):
+        #     end_ind = citation_lines[ind+1] if ind < len(citation_lines) - 1 else len(text_lines)
+        #     print(text_lines[lineno:end_ind])
+
+        # We already applied the regex to get values in all_citations, but it's sensible to apply it again for simplicity
+        if self.citation_type is CitationType.DOTTED:
+            # use the nonstart version of the dotted regex, since the one used
+            # before has ^ at the start, which will not work with a long string
+            # rather than individual lines
+            citations = self.dotted_re_nonstart.split(text_lines)
+        elif self.citation_type is CitationType.TRIGRAPH:
+            citations = self.trigraph_re.split(text_lines)
+        elif self.citation_type is CitationType.SQUARE:
+            citations = self.square_re.split(text_lines)
+        else:
+            citations = []
+
+        for citation in citations:
+            if len(citation) > 20: # some junk gets created by regex sometimes
+                # hyphens directly before a newline indicate word continuation
+                clean = citation.replace("-\n", '')
+                # want to get the whole thing on one line
+                self.references.append(clean.replace("\n", ' '))
+
+    def get_references_as_sets(self):
+        """To match the references from various papers, it is useful to have them in a
+        set representation so we can check the intersection. 
+        """
+        set_rep = []
+        for ref in self.references:
+            set_rep.append(set(ref.translate(None, ',.():').split(' ')))
+
+        return set_rep
+    
     def sequences_after_line(self, lineno, minlength=5):
         after = []
         for seq in sorted(self.increasing_sequences, key=operator.itemgetter(1)):
@@ -268,7 +322,7 @@ def main():
             print("no sequence/citations found for {}".format(d.name))
     for d in document_citations:
         print(d)
-        print(d._get_references_text())
+        print(d.get_references_as_sets())
         print("--------------------------------------------------")
 
 if __name__ == '__main__':

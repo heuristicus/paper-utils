@@ -10,3 +10,6 @@ filename, just with a .txt extension, use
 ```sh
 find . -type f -name *.pdf -exec pdftotext -raw {} \;
 ```
+
+Alternatively, you can use `pdfminer`, a python utility which should give
+similar results.
