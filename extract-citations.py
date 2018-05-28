@@ -125,18 +125,28 @@ class ReferenceGroup(object):
             self.max_reference_number = len(tri_set)
             self.all_references = self.trigraph_references
             self.reference_type = ReferenceType.TRIGRAPH
-        elif len(self.dotted_references) > max(self.max_reference_num/2, 10):
-            # Dotted references are relatively rare, most papers use square brackets.
-            # If they are used, then they only appear in the references section
-            # Assume that any number of dotted references below half the total number
-            # of references are just noise. Some papers with low max reference counts
-            # might have a weird effect, so assume that if there aren't more than 10
-            # dotted references that this is a paper with square references
-            self.all_references = sorted(self.dotted_references + self.square_references, key=operator.itemgetter(1))
-            self.reference_type = ReferenceType.DOTTED
         else:
-            self.all_references = self.square_references
-            self.reference_type = ReferenceType.SQUARE
+            # Deduce the overall reference type for the document by looking at
+            # sequences. Sometimes documents which use square refs in the main
+            # body use dotted refs in the reference section, so we look at the
+            # refs in that section to decide
+
+            square = [r for r in self.square_references if self.references_start < r[1] < self.references_end]
+            dotted = [r for r in self.dotted_references if self.references_start < r[1] < self.references_end]
+
+            self.reference_type = ReferenceType.SQUARE if len(square) > len(dotted) else ReferenceType.DOTTED
+            
+            if self.reference_type == ReferenceType.DOTTED:
+                # Dotted references are relatively rare, most papers use square
+                # brackets. If they are used, then they only appear in the
+                # references section Assume that any number of dotted references
+                # below half the total number of references are just noise. Some
+                # papers with low max reference counts might have a weird
+                # effect, so assume that if there aren't more than 10 dotted
+                # references that this is a paper with square references
+                self.all_references = sorted(self.dotted_references + self.square_references, key=operator.itemgetter(1))
+            else:
+                self.all_references = self.square_references
 
         self._extract_references()
 
