@@ -21,14 +21,12 @@ class ReferenceGroup(object):
     square_re = re.compile("\[([0-9]+)\]")
     # Some papers have references in the form "1. " followed by the reference
     # text. The reference number is assumed to be below 1000, which filters out
-    # possible conflicts with years in the reference text. Sometimes the reference
-    # numbers are separated from the text, in which case they will be alone on a
-    # line with the end of the line directly after the period. If not, a space
-    # will separate the number and the reference text.
-    dotted_re_string = "([0-9]{1,3})\.(\s+|$)"
-    dotted_re = re.compile("^" + dotted_re_string)
-    # need this to split a large string with regex
-    dotted_re_nonstart = re.compile(dotted_re_string)
+    # possible conflicts with years in the reference text. Sometimes the
+    # reference numbers are separated from the text, in which case they will be
+    # alone on a line with the end of the line directly after the period. If
+    # not, a space will separate the number and the reference text. Use
+    # multiline because we want to use this to split a text block later
+    dotted_re = re.compile("^([0-9]{1,3})\.(\s+|$)", re.MULTILINE)
 
     # Some references in the text itself will be in the form of (surname et al.
     # 2001b; surname and other 1999), this captures those (these are quite rare
@@ -83,26 +81,38 @@ class ReferenceGroup(object):
         self.all_references = []
         # tuples of (number of references, start line, end line, references per
         # line). Each tuple represents an increasing sequence of citation
-        # numbers in the given line range
-        self.increasing_sequences = []
+        # numbers in the given line range, if the citations are numbered.
+        # Otherwise it will consider citations which are close to each other in
+        # the text
+        self.sequences = []
         # This will contain reference text once the process is finished
         self.references = []
 
         # process the input file to do initial regex extraction
         self._process_file()
 
+        self.all_references = self.square_references + self.dotted_references + self.trigraph_references
+        
+        # Compute sequences where the reference number is increasing (if the references are numbered),
+        self.compute_sequences()
+
+        self._get_references_start()
+        self._get_references_end()
+
         # Check that the reference numbers are valid by making sure they are in
         # a valid range
         self.reference_nums_valid = self._valid_reference_nums()
 
-        # If we didn't get any references, or they were invalid, then this
-        # document is probably one with named references, so need to handle
-        # things differently
-        if not self.reference_nums_valid and not self.trigraph_references:
+        if not self.reference_nums_valid or not self.sequences:
+            # If we didn't manage to get any sequences, or the references were
+            # invalid, then this document is probably one with named references,
+            # so need to handle things differently
             self._process_file_named_references()
             self.all_references = self.named_references
             self.reference_type = ReferenceType.NAMED
-            self.compute_sequences(ignore_number=True)
+            self.compute_sequences()
+            self._get_references_start()
+            self._get_references_end()
         elif self.trigraph_references:
             # Trigraph and named references do not contain information about the
             # number of references which exist, so for consistency we must convert
@@ -115,7 +125,6 @@ class ReferenceGroup(object):
             self.max_reference_number = len(tri_set)
             self.all_references = self.trigraph_references
             self.reference_type = ReferenceType.TRIGRAPH
-            self.compute_sequences(ignore_number=True)
         elif len(self.dotted_references) > max(self.max_reference_num/2, 10):
             # Dotted references are relatively rare, most papers use square brackets.
             # If they are used, then they only appear in the references section
@@ -125,14 +134,10 @@ class ReferenceGroup(object):
             # dotted references that this is a paper with square references
             self.all_references = sorted(self.dotted_references + self.square_references, key=operator.itemgetter(1))
             self.reference_type = ReferenceType.DOTTED
-            self.compute_sequences()
         else:
             self.all_references = self.square_references
             self.reference_type = ReferenceType.SQUARE
-            self.compute_sequences()
 
-        self._get_references_start()
-        self._get_references_end()
         self._extract_references()
 
     def __str__(self):
@@ -141,6 +146,7 @@ class ReferenceGroup(object):
         str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_start + self.lines_processed)
         str_rep += "Total references: {}\n".format(len(self.references))
         str_rep += "Reference type seems to be {}\n".format(self.reference_type)
+        str_rep += "Sequences: {}\n".format(sorted(self.sequences, key=operator.itemgetter(0), reverse=True))
         str_rep += "Square refs: {}, dotted refs: {}, named refs: {}, trigraph refs: {}\n".format(len(self.square_references), len(self.dotted_references), len(self.named_references), len(self.trigraph_references))
 
         return str_rep
@@ -225,7 +231,7 @@ class ReferenceGroup(object):
                         match = self.named_ref_re.search(line)
                         if match:
                             end_refs.append((line, lineno + 1))
-
+            
             # This is more approximate than for other types of references
             self.max_reference_num = len(end_refs)
                             
@@ -246,7 +252,8 @@ class ReferenceGroup(object):
         """Check the numbers retrieved from the extraction of reference data to make
         sure they are as we would expect of a paper. i.e. they start at 1, and
         go up to some other number with no gaps. If this is not the case, then
-        the paper is most likely using named references.
+        the paper is most likely using named references. Only checks reference
+        numbers after the assumed start of the references
 
         invalid_prop if invalid/valid > invalid_prop, then consider the
         references to be invalid
@@ -255,7 +262,8 @@ class ReferenceGroup(object):
 
         """
         # Get all the references in ascending order, ignoring zeros
-        all_refnums = filter(lambda x:x!=0, sorted([r[0] for r in self.dotted_references] + [r[0] for r in self.square_references]))
+        allrefs_tmp = self.dotted_references + self.square_references
+        all_refnums = filter(lambda x:x!=0, sorted([r[0] for r in allrefs_tmp if r[1] > self.references_start]))
         if not all_refnums:
             self.max_reference_num = None
             return False
@@ -276,6 +284,7 @@ class ReferenceGroup(object):
                 invalid_refnums += 1
             else:
                 valid_refnums += 1
+
             # assume that any reference above 100 is a year
         if invalid_refnums / float(valid_refnums) > invalid_prop:
             self.max_reference_num = None
@@ -283,21 +292,26 @@ class ReferenceGroup(object):
 
         return True
                         
-    def compute_sequences(self, min_length=3, max_gap=8, ignore_number=False):
+    def compute_sequences(self, min_length=3, max_gap=8):
         """min_length is the minimum sequence length that will be considered
 
         max_gap is the maximum gap between two references. We want to use this
         function to extract references from the references section rather than
         the body of the paper, and those tend to be pretty close to each other.
 
-        ignore_number will just use the gap and min length rather than looking
-        at the number of the reference to check if it is increasing. This is
-        useful for the trigraph type which isn't numbered
-
         """
-        self.increasing_sequences = []
+        self.sequences = []
         if len(self.all_references) < 2:
             return
+
+        # If this is true, which is is for types other than dotted and square,
+        # we do not consider the citation number in the sequence. This means
+        # that it's less reliable in terms of getting correct values, but is
+        # still useful for determining the start and end of the citations
+        if isinstance(self.all_references[0][0], str):
+            ignore_number = True
+        else:
+            ignore_number = False
 
         # 3-tuple, sequence length, start line, end line
         start_ind = 0 # this starting index means that the first sequence is one shorter than it should be?
@@ -321,7 +335,7 @@ class ReferenceGroup(object):
                         cpl = num_lines
                     else:
                         cpl = num_lines/float(prev_item[1]-start_line)
-                    self.increasing_sequences.append((num_lines, start_line, prev_item[1], cpl))
+                    self.sequences.append((num_lines, start_line, prev_item[1], cpl))
 
                 start_ind = None # reset start ind so we know the sequence ended
 
@@ -333,7 +347,7 @@ class ReferenceGroup(object):
             num_lines = len(self.all_references) - 1 - start_ind
             # Add the final sequence
             cpl = num_lines/float(self.all_references[-1][1]-start_line)
-            self.increasing_sequences.append((num_lines, start_line, self.all_references[-1][1], cpl))
+            self.sequences.append((num_lines, start_line, self.all_references[-1][1], cpl))
 
     def _get_references_start(self):
         # If there is only one reference start line, then set it as the starting point
@@ -352,7 +366,7 @@ class ReferenceGroup(object):
                 min_gap = None
                 min_ind = None
                 min_line = ref_line
-                for ind, seq in enumerate(self.increasing_sequences):
+                for ind, seq in enumerate(self.sequences):
                     gap = abs(seq[1]-ref_line)
                     if not min_gap or gap < min_gap:
                         min_gap = gap
@@ -377,7 +391,7 @@ class ReferenceGroup(object):
                 max_ind = 0
                 for ind, gap_t in enumerate(multiple):
                     # gap_t stores the sequence index
-                    seq = self.increasing_sequences[gap_t[0]]
+                    seq = self.sequences[gap_t[0]]
                     if seq[0] > max_refs:
                         max_refs = seq[0]
                         max_ind = ind
@@ -452,22 +466,12 @@ class ReferenceGroup(object):
         if not text_lines:
             return
 
-        # Get the line numbers of references after the start of the reference
-        # block, and make the start line of the reference block 0. -1 because
-        # when constructing we start line numbers at 1 as with files, but
-        # here we want array indices
-        # reference_lines = [reference[1] - self.references_start - 1 for reference in sorted(self.all_references, key=operator.itemgetter(1)) if reference[1] >= self.references_start]
-
-        # for ind, lineno in enumerate(reference_lines):
-        #     end_ind = reference_lines[ind+1] if ind < len(reference_lines) - 1 else len(text_lines)
-        #     print(text_lines[lineno:end_ind])
-
         # We already applied the regex to get values in all_references, but it's sensible to apply it again for simplicity
         if self.reference_type is ReferenceType.DOTTED:
             # use the nonstart version of the dotted regex, since the one used
             # before has ^ at the start, which will not work with a long string
             # rather than individual lines
-            references = self.dotted_re_nonstart.split(text_lines)
+            references = self.dotted_re.split(text_lines)
         elif self.reference_type is ReferenceType.TRIGRAPH:
             references = self.trigraph_re.split(text_lines)
         elif self.reference_type is ReferenceType.SQUARE:
@@ -537,7 +541,7 @@ class ReferenceGroup(object):
     
     def sequences_after_line(self, lineno, minlength=5):
         after = []
-        for seq in sorted(self.increasing_sequences, key=operator.itemgetter(1)):
+        for seq in sorted(self.sequences, key=operator.itemgetter(1)):
             if (lineno <= seq[1] or lineno <= seq[2]) and seq[0] > minlength:
                 after.append(seq)
 
@@ -548,14 +552,17 @@ def main():
     document_references = []
 
     for fname in sys.argv[1:]:
+        if not os.path.isfile(fname):
+            continue
         print(fname)
         reference_group = ReferenceGroup(fname)
 
         document_references.append(reference_group)
 
     for d in document_references:
-        if not d.increasing_sequences or not d.all_references:
+        if not d.sequences or not d.all_references:
             print("no sequence/references found for {}".format(d.name))
+    print("Final")
     for d in document_references:
         print(d)
         for i, ref in enumerate(d.references):
