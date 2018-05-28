@@ -58,29 +58,47 @@ class ReferenceGroup(object):
     def __init__(self, fname):
         self.name = os.path.basename(fname)
         self.fname = fname
+        # guess about where the references section starts
         self.references_start = 0
+        # guess about where the references section ends
         self.references_end = 0
+        # how many lines ended up being processed from the references sections
         self.lines_processed = 0
+        # lines on which "start strings" appear
         self.ref_start_lines = []
+        # lines on which "end strings" appear
         self.end_material_lines = []
+        # the highest number extracted from common citation patterns, assume
+        # that the highest number is the number of total citations
         self.max_reference_num = 0
-        # Contains all found references, with 2-tuple containing reference number and line number
+        # tuples of number, line for square-bracket references
         self.square_references = []
+        # tuples of number, line for number and point references (e.g. 32.)
         self.dotted_references = []
+        # tuples of line, line number for non-numbered references
         self.named_references = []
+        # tuples of citation text (e.g. XYZ+90), line number for trigraph references
         self.trigraph_references = []
+        # Contains all found references, with 2-tuple containing reference number/content and line number
         self.all_references = []
+        # tuples of (number of references, start line, end line, references per
+        # line). Each tuple represents an increasing sequence of citation
+        # numbers in the given line range
         self.increasing_sequences = []
-
-        # This will contain references once the process is finished
+        # This will contain reference text once the process is finished
         self.references = []
 
-        # process the input file to extract some relevant bits
+        # process the input file to do initial regex extraction
         self._process_file()
 
-        # If we didn't get any references, then this document is probably one
-        # with named references, so need to handle things differently
-        if not self.dotted_references not self.square_references and not self.trigraph_references:
+        # Check that the reference numbers are valid by making sure they are in
+        # a valid range
+        self.reference_nums_valid = self._valid_reference_nums()
+
+        # If we didn't get any references, or they were invalid, then this
+        # document is probably one with named references, so need to handle
+        # things differently
+        if not self.reference_nums_valid and not self.trigraph_references:
             self._process_file_named_references()
             self.all_references = self.named_references
             self.reference_type = ReferenceType.NAMED
@@ -135,7 +153,6 @@ class ReferenceGroup(object):
                 for start_string in self.start_strings:
                     if start_string in line.lower() and len(line) < len(start_string) + 5:
                         self.ref_start_lines.append(lineno)
-                        print(lineno, line)
 
                 # try to get some information about possible supplementary
                 # material after the references
@@ -161,6 +178,9 @@ class ReferenceGroup(object):
                 for match in self.trigraph_re.finditer(line):
                     self.trigraph_references.append((match.group(1), lineno))
 
+                # These can cause some issues because numbers appear in the
+                # text, or in references as page numbers. The
+                # valid_reference_nums function should do something about this
                 dotted = self.dotted_re.match(line)
                 if dotted:
                     reference_number = int(dotted.group(1))
@@ -221,6 +241,47 @@ class ReferenceGroup(object):
 
                     
             self.named_references = line_refs + end_refs
+
+    def _valid_reference_nums(self, invalid_prop=0.1, number_cutoff=500):
+        """Check the numbers retrieved from the extraction of reference data to make
+        sure they are as we would expect of a paper. i.e. they start at 1, and
+        go up to some other number with no gaps. If this is not the case, then
+        the paper is most likely using named references.
+
+        invalid_prop if invalid/valid > invalid_prop, then consider the
+        references to be invalid
+        
+        number_cutoff any reference above this number is considered to be invalid
+
+        """
+        # Get all the references in ascending order, ignoring zeros
+        all_refnums = filter(lambda x:x!=0, sorted([r[0] for r in self.dotted_references] + [r[0] for r in self.square_references]))
+        if not all_refnums:
+            self.max_reference_num = None
+            return False
+        
+        if all_refnums[0] != 1:
+            # The first reference number should always be 1
+            self.max_reference_num = None
+            return False
+
+        # The maximum spacing between refnums should be 1. However, it is common
+        # that there are some random incorrect values scattered in the extracted
+        # data because of the nature of things, so we have to do another check
+        # at the end to see if this is systematic or just a blip
+        valid_refnums = 0
+        invalid_refnums = 0
+        for ind, r in enumerate(all_refnums[1:]):
+            if abs(all_refnums[ind] - r) > 1 or all_refnums[ind] > number_cutoff:
+                invalid_refnums += 1
+            else:
+                valid_refnums += 1
+            # assume that any reference above 100 is a year
+        if invalid_refnums / float(valid_refnums) > invalid_prop:
+            self.max_reference_num = None
+            return False
+
+        return True
                         
     def compute_sequences(self, min_length=3, max_gap=8, ignore_number=False):
         """min_length is the minimum sequence length that will be considered
