@@ -39,7 +39,7 @@ class ReferenceGroup(object):
     # For some named ref documents, it can be more reliable to use the separator
     # for authors, e.g. Bariya, P., and Zheng, S.; and Lowe, D. The last part of
     # the or is necessary for single authors in the same scheme (sometimes)
-    author_sep_re = re.compile("(?:\.,|\.;|,[ a-zA-Z]{,3}\.)")
+    author_sep_re = re.compile("(?:[A-Z]\.,|[A-Z]\.;|, [A-Z]\.)")
 
 
     # The AMS authorship trigraph takes the form [FS+90, AB+91]. Assume that
@@ -409,9 +409,9 @@ class ReferenceGroup(object):
             else:
                 self.references_start = min_gaps[0][2]
 
-        else: # 0 ref start lines
-            print("no start lines found")
-
+        else:
+            print("start point not found")
+        
     def _get_references_end(self):
         """Estimate the point at which references for this paper end, based on the sequences extracted
         """
