@@ -53,12 +53,15 @@ class ReferenceGroup(object):
     # looking at the references, these strings often appear at the start of
     # those sections.
     end_strings = ["appendix", "appendices", "supplementary"]
+    start_strings = ["bibliography", "references", "citations"]
 
     def __init__(self, fname):
         self.name = os.path.basename(fname)
         self.fname = fname
         self.references_start = 0
         self.references_end = 0
+        self.lines_processed = 0
+        self.ref_start_lines = []
         self.end_material_lines = []
         self.max_reference_num = 0
         # Contains all found references, with 2-tuple containing reference number and line number
@@ -77,7 +80,7 @@ class ReferenceGroup(object):
 
         # If we didn't get any references, then this document is probably one
         # with named references, so need to handle things differently
-        if not self.dotted_references and not self.square_references and not self.trigraph_references:
+        if not self.dotted_references not self.square_references and not self.trigraph_references:
             self._process_file_named_references()
             self.all_references = self.named_references
             self.reference_type = ReferenceType.NAMED
@@ -110,13 +113,14 @@ class ReferenceGroup(object):
             self.reference_type = ReferenceType.SQUARE
             self.compute_sequences()
 
+        self._get_references_start()
         self._get_references_end()
         self._extract_references()
 
     def __str__(self):
         str_rep = ""
         str_rep += self.name + "\n"
-        str_rep += "References start at {}, end at {}\n".format(self.references_start, min(max(self.end_material_lines), self.references_end))
+        str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_start + self.lines_processed)
         str_rep += "Total references: {}\n".format(len(self.references))
         str_rep += "Reference type seems to be {}\n".format(self.reference_type)
         str_rep += "Square refs: {}, dotted refs: {}, named refs: {}, trigraph refs: {}\n".format(len(self.square_references), len(self.dotted_references), len(self.named_references), len(self.trigraph_references))
@@ -128,8 +132,10 @@ class ReferenceGroup(object):
             for lineno, line in enumerate(f):
                 lineno += 1 # enumeration starts at zero
                 # crude method to extract the starting reference line, which works very well
-                if "references" in line.lower() and len(line) < len("references") + 5:
-                    self.references_start = lineno
+                for start_string in self.start_strings:
+                    if start_string in line.lower() and len(line) < len(start_string) + 5:
+                        self.ref_start_lines.append(lineno)
+                        print(lineno, line)
 
                 # try to get some information about possible supplementary
                 # material after the references
@@ -268,6 +274,59 @@ class ReferenceGroup(object):
             cpl = num_lines/float(self.all_references[-1][1]-start_line)
             self.increasing_sequences.append((num_lines, start_line, self.all_references[-1][1], cpl))
 
+    def _get_references_start(self):
+        # If there is only one reference start line, then set it as the starting point
+        if len(self.ref_start_lines) == 1:
+            self.references_start = self.ref_start_lines[0]
+        elif len(self.ref_start_lines) > 1:
+            # Otherwise, Use the extracted sequences to determine a starting point 
+            # Will go through each of the ref start lines and all the sequences,
+            # and see how far away each of the lines is from the beginning of a
+            # sequence. Will choose start based on the smallest gap. If there
+            # are two equal gaps, then... pick the one with the most references.
+            # Some papers have multiple reference sections for the main paper
+            # and appendices
+            min_gaps = []
+            for ref_line in self.ref_start_lines:
+                min_gap = None
+                min_ind = None
+                min_line = ref_line
+                for ind, seq in enumerate(self.increasing_sequences):
+                    gap = abs(seq[1]-ref_line)
+                    if not min_gap or gap < min_gap:
+                        min_gap = gap
+                        min_ind = ind
+
+                min_gaps.append((min_ind, min_gap, min_line))
+
+            # smallest gap first
+            min_gaps = sorted(min_gaps, key=operator.itemgetter(1))
+            # have all gaps now, need to check if there are multiple gaps with
+            # the same minimum distance, which can happen if there are multiple reference sections
+            multiple = [min_gaps[0]]
+            for ind, gap_t in enumerate(min_gaps[1:]):
+                if gap_t[1] == min_gaps[ind][1]:
+                    multiple.append(gap_t)
+
+            # If we get several minimum gaps of the same length, then we take
+            # the start to be the one which is closest to the sequence with the
+            # largest number of references
+            if multiple:
+                max_refs = 0
+                max_ind = 0
+                for ind, gap_t in enumerate(multiple):
+                    # gap_t stores the sequence index
+                    seq = self.increasing_sequences[gap_t[0]]
+                    if seq[0] > max_refs:
+                        max_refs = seq[0]
+                        max_ind = ind
+                self.references_start = multiple[max_ind][2]
+            else:
+                self.references_start = min_gaps[0][2]
+
+        else: # 0 ref start lines
+            print("no start lines found")
+
     def _get_references_end(self):
         """Estimate the point at which references for this paper end, based on the sequences extracted
         """
@@ -292,20 +351,36 @@ class ReferenceGroup(object):
                     break
 
             if self.end_material_lines and self.references_end:
-                lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start
+                # both end material and estimated ref end from the ref sequence
+                # exists, need to combine the two. If end material lines only
+                # happen before the start of references, then ignore them
+                if max(self.end_material_lines) < self.references_start:
+                    lines_to_process = self.references_end - self.references_start + 5
+                else:
+                    # Otherwise, err in favour of the shortest reference section
+                    # length
+                    lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start
             elif self.end_material_lines:
-                lines_to_process = max(self.end_material_lines) - self.references_start
+                if max(self.end_material_lines) > self.references_start:
+                    # If there is an appendix or supplementary material, that
+                    # usually comes directly after the references section, so
+                    # cutoff can be there.
+                    lines_to_process = max(self.end_material_lines) - self.references_start
+                else:
+                    # can't know where to end so have to process everything
+                    # after the references start
+                    lines_to_process = None
             elif self.references_end:
                 # add a bit of padding so that we get the text of the last reference
                 lines_to_process = self.references_end - self.references_start + 5
             else:
                 lines_to_process = None
                 
-            lines_processed = 0
+            self.lines_processed = 0
             for line in f:
                 lines += line
-                lines_processed += 1
-                if lines_to_process and lines_processed >= lines_to_process:
+                self.lines_processed += 1
+                if lines_to_process and self.lines_processed >= lines_to_process:
                     break
 
         return lines
@@ -412,8 +487,7 @@ def main():
     document_references = []
 
     for fname in sys.argv[1:]:
-        print("Processing {}".format(os.path.basename(fname)))
-
+        print(fname)
         reference_group = ReferenceGroup(fname)
 
         document_references.append(reference_group)
