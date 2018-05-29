@@ -304,12 +304,16 @@ class ReferenceGroup(object):
 
         return True
                         
-    def compute_sequences(self, min_length=3, max_gap=8):
+    def compute_sequences(self, min_length=3, max_line_gap=8, max_num_gap=1):
         """min_length is the minimum sequence length that will be considered
 
-        max_gap is the maximum gap between two references. We want to use this
+        max_line_gap is the maximum gap between two references. We want to use this
         function to extract references from the references section rather than
         the body of the paper, and those tend to be pretty close to each other.
+
+        max_num_gap is the maximum difference between the citation number to
+        consider it an increasing sequence. By default it is 1, to indicate that
+        we want to find increasing sequences which look like bibliographies
 
         """
         self.sequences = []
@@ -335,7 +339,9 @@ class ReferenceGroup(object):
             prev_item = self.all_references[ind]
             # Strictly less, because we really want to find sequences from the
             # references section which should be strictly increasing.
-            if (ignore_number or prev_item[0] < item[0]) and item[1] - prev_item[1] < max_gap:
+            line_gap_ok = item[1] - prev_item[1] < max_line_gap
+            num_gap_ok = item[0] > prev_item[0] and abs(item[0] - prev_item[0]) <= max_num_gap
+            if (ignore_number or num_gap_ok) and line_gap_ok:
                 if not start_ind:
                     start_ind = ind-1
                     start_line = prev_item[1]
@@ -438,7 +444,6 @@ class ReferenceGroup(object):
                     break
 
             if self.end_material_lines and self.references_end:
-                print("end mat plus ref end")
                 # both end material and estimated ref end from the ref sequence
                 # exists, need to combine the two. If end material lines only
                 # happen before the start of references, then ignore them
@@ -449,7 +454,6 @@ class ReferenceGroup(object):
                     # length
                     lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start + self.REF_END_PADDING
             elif self.end_material_lines:
-                print("end mat lines")
                 if max(self.end_material_lines) > self.references_start:
                     # If there is an appendix or supplementary material, that
                     # usually comes directly after the references section, so
@@ -460,7 +464,6 @@ class ReferenceGroup(object):
                     # after the references start
                     lines_to_process = None
             elif self.references_end:
-                print("refs end")
                 # add a bit of padding so that we get the text of the last reference
                 lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
             else:
