@@ -207,6 +207,9 @@ class ReferenceGroup(object):
                         self.max_reference_num = reference_number
 
     def _process_file_named_references(self):
+        
+        author_split_re = re.compile("; *")
+    
         with open(self.fname) as f:
             # First, extract the named references in the main text of the paper.
             # These are extractable, but we need to do more to get the actual
@@ -220,13 +223,13 @@ class ReferenceGroup(object):
             # to split them into their own ref
             split_refs = []
             for item in tmp_refs:
-                split = item[0].replace("\n", ' ').split('; ')
+                split = author_split_re.split(item[0].replace("\n", ' '))
                 # If the split works, there is more than one ref in the group,
                 # so create new tuples for each with the same line
                 if len(split) > 1:
                     split_refs.extend([(sp, item[1]) for sp in split])
                 else:
-                    split_refs.append((split, item[1]))
+                    split_refs.append((split[0], item[1]))
 
             # need to go through the file again to get to the line where
             # refs start. We also count the cumulative number of characters
@@ -340,7 +343,8 @@ class ReferenceGroup(object):
             # Strictly less, because we really want to find sequences from the
             # references section which should be strictly increasing.
             line_gap_ok = item[1] - prev_item[1] < max_line_gap
-            num_gap_ok = item[0] > prev_item[0] and abs(item[0] - prev_item[0]) <= max_num_gap
+            if not ignore_number:
+                num_gap_ok = item[0] > prev_item[0] and abs(item[0] - prev_item[0]) <= max_num_gap
             if (ignore_number or num_gap_ok) and line_gap_ok:
                 if not start_ind:
                     start_ind = ind-1
