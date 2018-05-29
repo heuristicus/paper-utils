@@ -33,7 +33,7 @@ class ReferenceGroup(object):
     # Some references in the text itself will be in the form of (surname et al.
     # 2001b; surname and other 1999), this captures those (these are quite rare
     # though)
-    named_re = re.compile("\(((?:[a-zA-Z0-9 \n\.,]+(?:[0-9]{4}[a-z]*)+[; ]*)+)\)")
+    named_re = re.compile("(?:\(|\[)((?:[ a-zA-Z\.,\n-]+(?:19|20)[0-9]{2}[; \n]*)+)(?:\)|\])")
     # In the references section there is no easy way to determine where one
     # reference starts and another begins, seems like the year might be one?
     # Assume years are between 1900 and 2099
@@ -246,7 +246,9 @@ class ReferenceGroup(object):
                         match = self.named_ref_re.search(line)
                         if match:
                             end_refs.append((line, lineno + 1))
-            
+
+            print(split_refs)
+                            
             # This is more approximate than for other types of references
             self.max_reference_num = len(end_refs)
                             
