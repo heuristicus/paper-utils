@@ -17,6 +17,8 @@ class ReferenceType(Enum):
     TRIGRAPH=4
 
 class ReferenceGroup(object):
+    REF_END_PADDING = 3
+    
     # Gets all references which are enclosed within square brackets
     square_re = re.compile("\[([0-9]+)\]")
     # Some papers have references in the form "1. " followed by the reference
@@ -167,7 +169,7 @@ class ReferenceGroup(object):
                 lineno += 1 # enumeration starts at zero
                 # crude method to extract the starting reference line, which works very well
                 for start_string in self.start_strings:
-                    if start_string in line.lower() and len(line) < len(start_string) + 5:
+                    if start_string in line.lower() and len(line) < len(start_string) + self.REF_END_PADDING:
                         self.ref_start_lines.append(lineno)
 
                 # try to get some information about possible supplementary
@@ -436,16 +438,18 @@ class ReferenceGroup(object):
                     break
 
             if self.end_material_lines and self.references_end:
+                print("end mat plus ref end")
                 # both end material and estimated ref end from the ref sequence
                 # exists, need to combine the two. If end material lines only
                 # happen before the start of references, then ignore them
                 if max(self.end_material_lines) < self.references_start:
-                    lines_to_process = self.references_end - self.references_start + 5
+                    lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
                 else:
                     # Otherwise, err in favour of the shortest reference section
                     # length
-                    lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start
+                    lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start + self.REF_END_PADDING
             elif self.end_material_lines:
+                print("end mat lines")
                 if max(self.end_material_lines) > self.references_start:
                     # If there is an appendix or supplementary material, that
                     # usually comes directly after the references section, so
@@ -456,8 +460,9 @@ class ReferenceGroup(object):
                     # after the references start
                     lines_to_process = None
             elif self.references_end:
+                print("refs end")
                 # add a bit of padding so that we get the text of the last reference
-                lines_to_process = self.references_end - self.references_start + 5
+                lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
             else:
                 lines_to_process = None
                 
