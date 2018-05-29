@@ -18,7 +18,7 @@ class ReferenceType(Enum):
 
 class ReferenceGroup(object):
     REF_END_PADDING = 3
-    
+
     # Gets all references which are enclosed within square brackets
     square_re = re.compile("\[([0-9]+)\]")
     # Some papers have references in the form "1. " followed by the reference
@@ -33,15 +33,18 @@ class ReferenceGroup(object):
     # Some references in the text itself will be in the form of (surname et al.
     # 2001b; surname and other 1999), this captures those (these are quite rare
     # though)
-    named_re = re.compile("(?:\(|\[)((?:[ a-zA-Z\.,\n-]+(?:19|20)[0-9]{2}[; \n]*)+)(?:\)|\])")
+    named_re = re.compile("(?:\(|\[)((?:[ a-zA-Z\.,\n-]+(?:\(|\[)*(?:19|20)[0-9]{2}(?:\)|\])*[; \n]*)+)(?:\)|\])")
     # In the references section there is no easy way to determine where one
     # reference starts and another begins, seems like the year might be one?
     # Assume years are between 1900 and 2099
-    named_ref_re = re.compile("(\(*(?:19|20)[0-9]{2}[a-z]*\)*)")
+    named_ref_re = re.compile("\(*((?:19|20)[0-9]{2}[a-z]*)\)*")
     # For some named ref documents, it can be more reliable to use the separator
-    # for authors, e.g. Bariya, P., and Zheng, S.; and Lowe, D. The last part of
-    # the or is necessary for single authors in the same scheme (sometimes)
-    author_sep_re = re.compile("(?:[A-Z]\.,|[A-Z]\.;|, [A-Z]\.)")
+    # for authors, e.g. Bariya, P., and Zheng, S.; and Lowe, D. The third part
+    # of the or is necessary for single authors in the same scheme (sometimes).
+    # The next part is useful for extracting authors specifically in the
+    # references section, because title names rarely have commas in them. The
+    # next one extracts author initials where commas are not used
+    author_sep_re = re.compile("(?:[A-Z]\.,|[A-Z]\.;|, [A-Z]\.|[a-zA-Z\n], | [A-Z] )")
 
 
     # The AMS authorship trigraph takes the form [FS+90, AB+91]. Assume that
@@ -94,7 +97,7 @@ class ReferenceGroup(object):
         self._process_file()
 
         self.all_references = self.square_references + self.dotted_references + self.trigraph_references
-        
+
         # Compute sequences where the reference number is increasing (if the references are numbered),
         self.compute_sequences()
 
@@ -137,7 +140,7 @@ class ReferenceGroup(object):
             dotted = [r for r in self.dotted_references if self.references_start < r[1] < self.references_end]
 
             self.reference_type = ReferenceType.SQUARE if len(square) > len(dotted) else ReferenceType.DOTTED
-            
+
             if self.reference_type == ReferenceType.DOTTED:
                 # Dotted references are relatively rare, most papers use square
                 # brackets. If they are used, then they only appear in the
@@ -207,9 +210,9 @@ class ReferenceGroup(object):
                         self.max_reference_num = reference_number
 
     def _process_file_named_references(self):
-        
+
         author_split_re = re.compile("; *")
-    
+
         with open(self.fname) as f:
             # First, extract the named references in the main text of the paper.
             # These are extractable, but we need to do more to get the actual
@@ -234,9 +237,10 @@ class ReferenceGroup(object):
             # need to go through the file again to get to the line where
             # refs start. We also count the cumulative number of characters
             # so that we can associate a character position with a specific
-            # line
+            # line.
             file_linechars = []
             end_refs = []
+            end_years = []
             with open(self.fname) as f:
                 for lineno, line in enumerate(f):
                     # need to get line length in bytes
@@ -246,12 +250,29 @@ class ReferenceGroup(object):
                         match = self.named_ref_re.search(line)
                         if match:
                             end_refs.append((line, lineno + 1))
+                            end_years.append(match.group(1))
 
-            print(split_refs)
-                            
+            # The end references regex can be bad for separating references,
+            # especially if there are multiple years in a single citation in bad
+            # cases. Because of this, go over the list and look at the years
+            # extracted, keeping only one of a pair of years, if the line
+            # numbers of the pair are close
+            pruned_end_refs = []
+            ind = 0
+            while ind < len(end_refs) - 1:
+                years_equal = end_years[ind] == end_years[ind+1]
+                line_dist = abs(end_refs[ind][1] - end_refs[ind+1][1])
+
+                pruned_end_refs.append(end_refs[ind])
+
+                if not years_equal or line_dist >= 2:
+                    ind += 1
+                else:
+                    ind += 2 # skip over the next item
+
             # This is more approximate than for other types of references
-            self.max_reference_num = len(end_refs)
-                            
+            self.max_reference_num = len(pruned_end_refs)
+
             # Change the position in bytes to a position in lines for the
             # references in the main text (i.e. not end refs)
             line_refs = []
@@ -262,8 +283,7 @@ class ReferenceGroup(object):
                         line_refs.append((item[0], lineno + 1)) # +1, first line is index 1, enum from 0
                         break
 
-                    
-            self.named_references = line_refs + end_refs
+            self.named_references = line_refs + pruned_end_refs
 
     def _valid_reference_nums(self, invalid_prop=0.1, number_cutoff=500):
         """Check the numbers retrieved from the extraction of reference data to make
@@ -274,7 +294,7 @@ class ReferenceGroup(object):
 
         invalid_prop if invalid/valid > invalid_prop, then consider the
         references to be invalid
-        
+
         number_cutoff any reference above this number is considered to be invalid
 
         """
@@ -284,7 +304,7 @@ class ReferenceGroup(object):
         if not all_refnums:
             self.max_reference_num = None
             return False
-        
+
         if all_refnums[0] != 1:
             # The first reference number should always be 1
             self.max_reference_num = None
@@ -308,7 +328,7 @@ class ReferenceGroup(object):
             return False
 
         return True
-                        
+
     def compute_sequences(self, min_length=3, max_line_gap=8, max_num_gap=1):
         """min_length is the minimum sequence length that will be considered
 
@@ -378,7 +398,7 @@ class ReferenceGroup(object):
         if len(self.ref_start_lines) == 1:
             self.references_start = self.ref_start_lines[0]
         elif len(self.ref_start_lines) > 1:
-            # Otherwise, Use the extracted sequences to determine a starting point 
+            # Otherwise, Use the extracted sequences to determine a starting point
             # Will go through each of the ref start lines and all the sequences,
             # and see how far away each of the lines is from the beginning of a
             # sequence. Will choose start based on the smallest gap. If there
@@ -425,7 +445,7 @@ class ReferenceGroup(object):
 
         else:
             print("start point not found")
-        
+
     def _get_references_end(self):
         """Estimate the point at which references for this paper end, based on the sequences extracted
         """
@@ -474,7 +494,7 @@ class ReferenceGroup(object):
                 lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
             else:
                 lines_to_process = None
-                
+
             self.lines_processed = 0
             for line in f:
                 lines += line
@@ -502,7 +522,7 @@ class ReferenceGroup(object):
             references = self.square_re.split(text_lines)
         else:
             references = self._extract_references_named(text_lines)
-                
+
 
         for reference in references:
             if len(reference) > 20: # some junk gets created by regex sometimes
@@ -547,22 +567,24 @@ class ReferenceGroup(object):
         else:
             end_refs = [r[1]-self.references_start for r in self.all_references if r[1] > self.references_start]
 
+        end_refs.append(end_refs[-1] + self.REF_END_PADDING)
+
         refs = []
         for ind, ref in enumerate(end_refs[1:]):
             refs.append("\n".join(splitlines[end_refs[ind]:ref]))
-            
+
         return refs
 
     def get_references_as_sets(self):
         """To match the references from various papers, it is useful to have them in a
-        set representation so we can check the intersection. 
+        set representation so we can check the intersection.
         """
         set_rep = []
         for ref in self.references:
             set_rep.append(set(ref.translate(None, ',.():;').split(' ')))
 
         return set_rep
-    
+
     def sequences_after_line(self, lineno, minlength=5):
         after = []
         for seq in sorted(self.sequences, key=operator.itemgetter(1)):
