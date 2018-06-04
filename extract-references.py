@@ -17,7 +17,15 @@ class ReferenceType(Enum):
     TRIGRAPH=4
 
 class ReferenceGroup(object):
+    # For the last reference in a document, we don't know exactly where it ends,
+    # so we assume that we should consider it to run for this number of lines
+    # after its start point.
     REF_END_PADDING = 3
+    # If an extracted has less than this number of characters, then it's
+    # probably not a reference
+    MIN_REF_CHARS = 20
+    # Assume that references are not any longer than this number of lines
+    MAX_REF_LINES = 5
 
     # Gets all references which are enclosed within square brackets
     square_re = re.compile("\[([0-9]+)\]")
@@ -33,6 +41,8 @@ class ReferenceGroup(object):
     # Some references in the text itself will be in the form of (surname et al.
     # 2001b; surname and other 1999), this captures those (these are quite rare
     # though)
+
+    # (?:\)|\])* section after the year causes the expression to break out of the brackets... need to fix
     named_re = re.compile("(?:\(|\[)((?:[ a-zA-Z\.,\n-]+(?:\(|\[)*(?:19|20)[0-9]{2}(?:\)|\])*[; \n]*)+)(?:\)|\])")
     # In the references section there is no easy way to determine where one
     # reference starts and another begins, seems like the year might be one?
@@ -265,7 +275,7 @@ class ReferenceGroup(object):
 
                 pruned_end_refs.append(end_refs[ind])
 
-                if not years_equal or line_dist >= 2:
+                if not years_equal or line_dist > 2:
                     ind += 1
                 else:
                     ind += 2 # skip over the next item
@@ -300,7 +310,7 @@ class ReferenceGroup(object):
         """
         # Get all the references in ascending order, ignoring zeros
         allrefs_tmp = self.dotted_references + self.square_references
-        all_refnums = filter(lambda x:x!=0, sorted([r[0] for r in allrefs_tmp if r[1] > self.references_start]))
+        all_refnums = filter(lambda x:x!=0, sorted([r[0] for r in allrefs_tmp if r[1] >= self.references_start]))
         if not all_refnums:
             self.max_reference_num = None
             return False
@@ -382,7 +392,7 @@ class ReferenceGroup(object):
                     self.sequences.append((num_lines, start_line, prev_item[1], cpl))
 
                 start_ind = None # reset start ind so we know the sequence ended
-
+            
         # only if the last sequence starts with an element in the list before
         # the last one. start_ind is none if there is no sequence to be
         # finalised
@@ -444,7 +454,7 @@ class ReferenceGroup(object):
                 self.references_start = min_gaps[0][2]
 
         else:
-            print("start point not found")
+            self.references_start = sorted(self.sequences, key=operator.itemgetter(1))[0][1]
 
     def _get_references_end(self):
         """Estimate the point at which references for this paper end, based on the sequences extracted
@@ -525,11 +535,15 @@ class ReferenceGroup(object):
 
 
         for reference in references:
-            if len(reference) > 20: # some junk gets created by regex sometimes
+            # Don't add a "reference" which is less than this number of chars, it's unlikely to be one
+            if len(reference) > self.MIN_REF_CHARS: # some junk gets created by regex sometimes
+                # Truncate super long references, which can happen when text and references are mixed
+                if reference.count("\n") > self.MAX_REF_LINES:
+                    reference = ''.join(reference.split("\n")[:self.MAX_REF_LINES])
                 # hyphens directly before a newline indicate word continuation
-                clean = reference.replace("-\n", '')
-                # want to get the whole thing on one line
-                self.references.append(clean.replace("\n", ' '))
+                # Also want to get the whole thing on one line
+                clean = reference.replace("-\n", '').replace("\n", ' ')
+                self.references.append(clean)
 
     def _extract_references_named(self, text_lines, authsep_range=0.3):
         """Named reference extraction is a bit more involved because the reference style
