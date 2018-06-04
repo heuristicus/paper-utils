@@ -6,6 +6,7 @@ import re
 import string
 import math
 import operator
+import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
@@ -147,7 +148,9 @@ class ReferenceGroup(object):
                 raise ValueError('Filename "{}" does not conform to regex "{}" that was provided'.format(base_file, filename_regex.regex.pattern))
         else:
             self.title = base_file
-            
+
+        self.logger = logging.getLogger()
+
         self.fname = fname
         # guess about where the references section starts
         self.references_start = 0
@@ -245,7 +248,7 @@ class ReferenceGroup(object):
 
     def __str__(self):
         str_rep = ""
-        str_rep += self.name + "\n"
+        str_rep += self.title + "\n"
         str_rep += "References start at {}, end at {}\n".format(self.references_start, self.references_start + self.lines_processed)
         str_rep += "Total references: {}\n".format(len(self.references))
         str_rep += "Reference type seems to be {}\n".format(self.reference_type)
@@ -558,16 +561,29 @@ class ReferenceGroup(object):
                     break
 
             if self.end_material_lines and self.references_end:
+                self.logger.debug("Got end material lines and end of refs")
                 # both end material and estimated ref end from the ref sequence
                 # exists, need to combine the two. If end material lines only
                 # happen before the start of references, then ignore them
-                if max(self.end_material_lines) < self.references_start:
+                last_end_material = max(self.end_material_lines)
+                end_mat_in_seq = False
+                # Check if the end material appears in the middle of a sequence,
+                # and if it does, it is discarded - sequences are stronger than
+                # end material
+                for seq in self.sequences:
+                    if seq[1] <= last_end_material <= seq[2]:
+                        end_mat_in_seq = True
+                        break
+                    
+                if last_end_material < self.references_start or end_mat_in_seq:
+                    self.logger.debug("End material lines end at {}, references start at {}".format(last_end_material, self.references_start))
                     lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
                 else:
-                    # Otherwise, err in favour of the shortest reference section
-                    # length
+                    self.logger.debug("End material exists (line {}) after the start of references (line {})".format(last_end_material, self.references_start))
+                    
                     lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start + self.REF_END_PADDING
             elif self.end_material_lines:
+                self.logger.debug("Got only end material lines")
                 if max(self.end_material_lines) > self.references_start:
                     # If there is an appendix or supplementary material, that
                     # usually comes directly after the references section, so
@@ -578,9 +594,11 @@ class ReferenceGroup(object):
                     # after the references start
                     lines_to_process = None
             elif self.references_end:
+                self.logger.debug("got only references end")
                 # add a bit of padding so that we get the text of the last reference
                 lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
             else:
+                self.logger.debug("got no information about end material or references end")
                 lines_to_process = None
 
             self.lines_processed = 0
@@ -686,17 +704,21 @@ class ReferenceGroup(object):
         return after
 
 def main():
-    document_references = refgroup_from_filelist(sys.argv[1:])
+    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
         
+    document_references = refgroup_from_filelist(sys.argv[1:])
+
     for d in document_references:
         if not d.sequences or not d.all_references:
-            print("no sequence/references found for {}".format(d.name))
-    print("Final")
+            logger.info("no sequence/references found for {}".format(d.name))
+    logger.info("Final")
     for d in document_references:
-        print(d)
+        logger.info(d)
         for i, ref in enumerate(d.references):
-            print("{}: {}".format(i+1, ref))
-        print("--------------------------------------------------")
+            logger.info("{}: {}".format(i+1, ref))
+        logger.info("--------------------------------------------------")
 
 if __name__ == '__main__':
     main()
