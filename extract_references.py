@@ -10,6 +10,62 @@ import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
 
+def refgroup_from_filelist(filelist, filename_regex=None):
+    """Given a list of files, will create a reference group from each and add it to
+    a list, which is returned at the end.
+
+    ignore_fnames allows the format of the file name to be ignored. 
+
+    """
+    docs = []
+    for fname in sys.argv[1:]:
+        if not os.path.isfile(fname):
+            continue
+
+        try:
+            reference_group = ReferenceGroup(fname, filename_regex)
+            docs.append(reference_group)
+        except ValueError as ex:
+            print(ex.message)
+
+    return docs
+
+class FilenameRegex(object):
+    """Used as an optional parameter to a referencegroup to extract data from the
+    filename
+
+    """
+    def __init__(self, regex=None, author_ind=None, title_ind=None, year_ind=None):
+        self.regex = regex
+        self.author_ind = author_ind
+        self.title_ind = title_ind
+        self.year_ind = year_ind
+
+        if self.is_valid():
+            self.regex = re.compile(self.regex)
+            
+    def is_valid(self):
+        """For this object to be valid, must have a regex string and at least one of the
+        author, title or year indices set
+
+        """
+        return self.regex is not None and (self.author_ind or self.title_ind or self.year_ind)
+
+    def get_data(self, filename):
+        """Extract the author, title, and year from the given filename, using the regex
+        specified. Returns a tuple of (author, title, year), or None if no match
+        was found or 
+
+        """
+        match = self.regex.match(filename)
+        if match:
+            author = match.group(self.author_ind) if self.author_ind else None
+            title = match.group(self.title_ind) if self.title_ind else None
+            year = match.group(self.year_ind) if self.year_ind else None
+            return (author, title, year)
+        else:
+            return None
+        
 class ReferenceType(Enum):
     SQUARE=1
     DOTTED=2
@@ -68,8 +124,30 @@ class ReferenceGroup(object):
     end_strings = ["appendix", "appendices", "supplementary"]
     start_strings = ["bibliography", "references", "citations"]
 
-    def __init__(self, fname):
-        self.name = os.path.basename(fname)
+    def __init__(self, fname, filename_regex=FilenameRegex()):
+        """fname is the file name to read from
+
+        filename_regex expects a FilenameRegex object which specifies a regular
+        expression and additional information to use to extract the author,
+        title and year from the file name. If we wanted to extract from files
+        with the format "Author - year - title", then we would pass the object
+        FilenameRegex("(.*) - (.*) - (.*)", author_ind=1, year_ind=2,
+        title_ind=3). Each group (i.e. parenthesis enclosed section) will be
+        assumed to contain one of the three bits of information we want to
+        extract. The latter parameters define which group contains which piece
+        of information
+
+        """
+        base_file = os.path.splitext(os.path.basename(fname))[0]
+        if filename_regex and filename_regex.is_valid():
+            data = filename_regex.get_data(base_file)
+            if data:
+                self.author, self.title, self.year = data
+            else:
+                raise ValueError('Filename "{}" does not conform to regex "{}" that was provided'.format(base_file, filename_regex.regex.pattern))
+        else:
+            self.title = base_file
+            
         self.fname = fname
         # guess about where the references section starts
         self.references_start = 0
@@ -608,17 +686,8 @@ class ReferenceGroup(object):
         return after
 
 def main():
-
-    document_references = []
-
-    for fname in sys.argv[1:]:
-        if not os.path.isfile(fname):
-            continue
-        print(fname)
-        reference_group = ReferenceGroup(fname)
-
-        document_references.append(reference_group)
-
+    document_references = refgroup_from_filelist(sys.argv[1:])
+        
     for d in document_references:
         if not d.sequences or not d.all_references:
             print("no sequence/references found for {}".format(d.name))
