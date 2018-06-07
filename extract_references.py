@@ -281,7 +281,8 @@ class ReferenceGroup(object):
                 lineno += 1 # enumeration starts at zero
                 # crude method to extract the starting reference line, which works very well
                 for start_string in self.start_strings:
-                    if start_string in line.lower() and len(line) < len(start_string) + self.REF_END_PADDING:
+                    lstrip = line.lower().strip()
+                    if start_string in lstrip and len(lstrip) < len(start_string) + self.REF_END_PADDING:
                         self.ref_start_lines.append(lineno)
 
                 # try to get some information about possible supplementary
@@ -505,8 +506,10 @@ class ReferenceGroup(object):
     def _get_references_start(self):
         # If there is only one reference start line, then set it as the starting point
         if len(self.ref_start_lines) == 1:
+            self.logger.debug("Only one ref start line exists ({}), setting that as start".format(self.ref_start_lines[0]))
             self.references_start = self.ref_start_lines[0]
         elif len(self.ref_start_lines) > 1:
+            self.logger.debug("More than one start line exists ({})".format(self.ref_start_lines))
             # Otherwise, Use the extracted sequences to determine a starting point
             # Will go through each of the ref start lines and all the sequences,
             # and see how far away each of the lines is from the beginning of a
