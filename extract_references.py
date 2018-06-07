@@ -76,7 +76,11 @@ class ReferenceGroup(object):
     # For the last reference in a document, we don't know exactly where it ends,
     # so we assume that we should consider it to run for this number of lines
     # after its start point.
-    REF_END_PADDING = 3
+    REF_END_LINE_PADDING = 3
+    # When we find a string with one of the start strings (i.e. references),
+    # there may be a few additional characters in the string (like a section
+    # number), so add this padding to make sure we get those lines.
+    REF_START_CHAR_PADDING = 5
     # If an extracted has less than this number of characters, then it's
     # probably not a reference
     MIN_REF_CHARS = 20
@@ -282,7 +286,7 @@ class ReferenceGroup(object):
                 # crude method to extract the starting reference line, which works very well
                 for start_string in self.start_strings:
                     lstrip = line.lower().strip()
-                    if start_string in lstrip and len(lstrip) < len(start_string) + self.REF_END_PADDING:
+                    if start_string in lstrip and len(lstrip) < len(start_string) + self.REF_START_CHAR_PADDING:
                         self.ref_start_lines.append(lineno)
 
                 # try to get some information about possible supplementary
@@ -598,11 +602,11 @@ class ReferenceGroup(object):
                     
                 if last_end_material < self.references_start or end_mat_in_seq:
                     self.logger.debug("End material lines end at {}, references start at {}".format(last_end_material, self.references_start))
-                    lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
+                    lines_to_process = self.references_end - self.references_start + self.REF_END_LINE_PADDING
                 else:
                     self.logger.debug("End material exists (line {}) after the start of references (line {})".format(last_end_material, self.references_start))
                     
-                    lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start + self.REF_END_PADDING
+                    lines_to_process = min(max(self.end_material_lines), self.references_end) - self.references_start + self.REF_END_LINE_PADDING
             elif self.end_material_lines:
                 self.logger.debug("Got only end material lines")
                 if max(self.end_material_lines) > self.references_start:
@@ -617,7 +621,7 @@ class ReferenceGroup(object):
             elif self.references_end:
                 self.logger.debug("got only references end")
                 # add a bit of padding so that we get the text of the last reference
-                lines_to_process = self.references_end - self.references_start + self.REF_END_PADDING
+                lines_to_process = self.references_end - self.references_start + self.REF_END_LINE_PADDING
             else:
                 self.logger.debug("got no information about end material or references end")
                 lines_to_process = None
@@ -698,7 +702,7 @@ class ReferenceGroup(object):
         else:
             end_refs = [r[1]-self.references_start for r in self.all_references if r[1] > self.references_start]
 
-        end_refs.append(end_refs[-1] + self.REF_END_PADDING)
+        end_refs.append(end_refs[-1] + self.REF_END_LINE_PADDING)
 
         refs = []
         for ind, ref in enumerate(end_refs[1:]):
