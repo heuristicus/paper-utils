@@ -7,8 +7,7 @@ import string
 import math
 import operator
 import logging
-import matplotlib.pyplot as plt
-import numpy as np
+import unidecode
 from enum import Enum
 
 def refgroup_from_filelist(filelist, filename_regex=None):
@@ -27,7 +26,7 @@ def refgroup_from_filelist(filelist, filename_regex=None):
             reference_group = ReferenceGroup(fname, filename_regex)
             docs.append(reference_group)
         except ValueError as ex:
-            print(ex.message)
+            logging.getLogger().warning((str(ex)))
 
     return docs
 
@@ -125,6 +124,8 @@ class ReferenceGroup(object):
     end_strings = ["appendix", "appendices", "supplementary"]
     start_strings = ["bibliography", "references", "citations"]
 
+    group_id = 0
+
     def __init__(self, fname, filename_regex=FilenameRegex()):
         """fname is the file name to read from
 
@@ -139,11 +140,16 @@ class ReferenceGroup(object):
         of information
 
         """
+        self.group_id = ReferenceGroup.group_id
+        ReferenceGroup.group_id += 1
+        
         base_file = os.path.splitext(os.path.basename(fname))[0]
         if filename_regex and filename_regex.is_valid():
             data = filename_regex.get_data(base_file)
             if data:
                 self.author, self.title, self.year = data
+                self.author = str(unidecode.unidecode(unicode(self.author, 'utf8')))
+                self.title = str(unidecode.unidecode(unicode(self.title, 'utf8')))
             else:
                 raise ValueError('Filename "{}" does not conform to regex "{}" that was provided'.format(base_file, filename_regex.regex.pattern))
         else:
@@ -152,6 +158,9 @@ class ReferenceGroup(object):
         self.logger = logging.getLogger()
 
         self.fname = fname
+        # shortened name based on author, year and title, or if author and year
+        # not available, just title
+        self._short_name = None
         # guess about where the references section starts
         self.references_start = 0
         # guess about where the references section ends
@@ -257,6 +266,15 @@ class ReferenceGroup(object):
 
         return str_rep
 
+    def short_name(self):
+        if not self._short_name:
+            if self.author and self.year:
+                self._short_name =  "{} ({}) {}".format(self.author, self.year, self.title.split(" ")[0])
+            else:
+                self._short_name = " ".join(self.title.split(" ")[:3])
+
+        return self._short_name
+    
     def _process_file(self):
         with open(self.fname) as f:
             for lineno, line in enumerate(f):
