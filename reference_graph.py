@@ -163,19 +163,80 @@ def similar_references(docs, overlap_prop = 0.6, min_set_size = 4):
                 # possibility of stuff after the title being included
                 c_list = all_refs[cur_ind][1]
                 o_list = all_refs[other_ind][1]
-                if c_list == o_list or arrays_contain_same_reference(c_list, o_list, common):
+                if arrays_contain_same_reference(c_list, o_list, common):
                     similar[cur_ind].append(other_ind)
                     similar[other_ind].append(cur_ind)
 
 
     return all_refs, similar
 
-def arrays_contain_same_reference(first, second, common):
+def arrays_contain_same_reference(first, second, common, sequence_skip=2):
+    """sequence_skip defines how far apart two elements of the sequence can be for
+    them to still be considered in a sequence. e.g. with skip of 2, 1,2,4,5 is a
+    valid sequence but 1,2,5,6 is not
+
+    """
+
+    if first == second:
+        return True
+
     print("\n--------------------------------------------------")
     print("Arrays not equal:")
     print(first)
     print(second)
 
+    scores = []
+    # slide the first array along the second one to see if there is a
+    # significant number of elements which are the same at some point
+    for i in range(1, len(first) + len(second)):
+        # This is how much should be trimmed from each list. Required when the
+        # shorter list goes past the end of the longer list. The minimum part
+        # gives you how far beyond the end of the longest list the current index
+        # is. The value of i is basically where the last element of the first
+        # list sits in terms of the second. If i-len is negative, then we are
+        # still on a valid index of the second list. If it is positive, then the
+        # end of the first list has gone past the end of the second list. The
+        # trim will remove elements from the first list which have gone past the
+        # end, and remove elements correspondingly from the start of the other
+        # list to keep the list length the same
+        trim = max(min(i-len(first), i-len(second)), 0)
+        # print("len first -i:{}".format(len(first) - i))
+        # print("len second -i:{}".format(len(second) - i))
+        # print("trimming {} from both".format(trim))
+        first_slice_end = -trim if trim > 0 else 0
+        second_slice_start = trim if trim > 0 else 0
+
+        first_sliced = first[-i:first_slice_end or None]
+        second_sliced = second[second_slice_start or None:i]
+        
+        # Also need to consider overlap. If one list is longer than the other,
+        # then there will be a point like the following:
+        #
+        # -12345
+        # 123456
+        #
+        # The second list is one longer than the first, with - indicating that
+        # there is no overlap of the lists there because the first list does not
+        # have enough elements. So, we need to remove the first element of the
+        # second list to get lists of equal length
+
+        if len(first_sliced) > len(second_sliced):
+            first_sliced = first_sliced[:-abs(len(first_sliced) - len(second_sliced))]
+        else:
+            second_sliced = second_sliced[abs(len(first_sliced) - len(second_sliced)):]
+
+        # print("first slice len: {}, second slice len: {}".format(len(first_sliced), len(second_sliced)))
+        # print("first: {}".format(first_sliced))
+        # print("second: {}".format(second_sliced))
+
+        score = 0
+        for i, v in enumerate(first_sliced):
+            if first_sliced[i] == second_sliced[i]:
+                score += 1
+        scores.append(score)
+
+    print(scores)
+    
     # Find the index of occurrences of common words in the two references,
     # and use that information to get approximate extents of the title. If
     # the title is the same, then the length of the list from earliest to
@@ -187,14 +248,16 @@ def arrays_contain_same_reference(first, second, common):
         first_inds.append(first.index(word))
         second_inds.append(second.index(word))
 
-    print("inds common first: {}".format(sorted(first_inds)))
-    print("inds common second: {}".format(sorted(second_inds)))
+    first_inds.sort()
+    second_inds.sort()
+    print("inds common first: {}".format(first_inds))
+    print("inds common second: {}".format(second_inds))
 
-    first_min = min(first_inds)
-    first_max = max(first_inds)
-    second_min = min(second_inds)
-    second_max = max(second_inds)
-
+    first_min = first_inds[0]
+    first_max = first_inds[-1]
+    second_min = second_inds[0]
+    second_max = second_inds[-1]
+ 
     extent_first = first[first_min:first_max + 1]
     extent_second = second[second_min:second_max + 1]
     print("common extent list first: {}".format(extent_first))
@@ -202,11 +265,26 @@ def arrays_contain_same_reference(first, second, common):
 
     if extent_first == extent_second:
         return True
+
+    # If the extents are not equal, we should look at the indices and check to
+    # see if the extracted words are in a sequence or not, which should indicate
+    # where the title is and where there are words which we can consider to be
+    # clutter (i.e. in journal titles)
+    seq_first = [val for ind,val in enumerate(first_inds[:-1]) if abs(val - first_inds[ind+1]) <= sequence_skip]
+    seq_second = [val for ind,val in enumerate(second_inds[:-1]) if abs(val - second_inds[ind+1]) <= sequence_skip]
+    print(seq_first)
+    print(seq_second)
+
+    trimmed_extent_first = first[seq_first[0]:seq_first[-1]]
+    trimmed_extent_second = second[seq_second[0]:seq_second[-1]]
+
+    print(trimmed_extent_first)
+    print(trimmed_extent_second)
     
-    # need to maybe consider more here, because there may be repeated
-    # common words in one of the references, e.g. perhaps the name of
-    # the journal has one of the words in it and hasn't been stripped
-    # correctly.
+    # Maybe we got rid of some of the confounding stuff?
+    if trimmed_extent_first == trimmed_extent_first:
+        return True
+
     return False
 
 def process_similar(all_refs, similar):

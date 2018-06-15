@@ -234,6 +234,18 @@ class TestArraySimilarityMethods(unittest.TestCase):
 
         self.assertTrue(arrays_contain_same_reference(first, second, common))
 
+
+    def test_both_clutter_after_repeated_different(self):
+        # Artificially construct something so that the overlap is in the junk
+        paper = ["this", "is", "the", "paper", "title"]
+        junk_first = ["this", "here", "junk", "words"]
+        junk_second = ["yet", "more", "stuff", "junk"]
+        first = paper + junk_first
+        second = paper + junk_second
+        common = set(first).intersection(set(second))
+
+        self.assertTrue(arrays_contain_same_reference(first, second, common))
+
     def test_both_clutter_before_after(self):
         paper_ind = random.randint(0, len(paper_titles) - 1)
         junk_before_first_ind = random.randint(0, len(junk) - 1)
