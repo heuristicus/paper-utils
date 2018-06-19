@@ -2,6 +2,7 @@
 import sys
 import os
 import logging
+import argparse
 import string
 import pickle
 from extract_references import ReferenceGroup, refgroup_from_filelist, FilenameRegex
@@ -16,13 +17,13 @@ stopwords = ['an', 'for', 'do', 'its', 'of', 'is', 'or', 'who', 'from', 'the', '
 term_stopwords = ['convolutional', 'neural', 'networks', 'semantic', 'segmentation', 'deep']
 
 # Strings which often come in the journal section of a reference
-conf_strings = ["proceedings", "conference", "journal", "transactions", "letters", "advances", "arxiv", " conf.", " proc.", "ieee", "international", "int.", "volume", "eccv", "icra", "cvpr", "iccv", " acm "]
+conf_strings = ["proceedings", "conference", "journal", "transactions", "letters", "advances", "arxiv", " conf.", " proc.", "ieee", "international", "int.", "volume", "eccv", "icra", "cvpr", "iccv", " acm ", " in: ", "editors", " eds.", "ijcv"]
 
 
 punctuation = ",.():;'\""
+logger = logging.getLogger()
 
 def match_reference_to_title(docs):
-    logger = logging.getLogger()
     edges = []
 
     graph = Graph()
@@ -113,7 +114,7 @@ def similar_references(docs, overlap_prop = 0.6, min_set_size = 4):
                 if found_ind > 0:
                     conf_inds.append(found_ind)
 
-            print(conf_inds)
+            logger.debug(conf_inds)
             if not conf_inds:
                 # print("found no conference strings")
                 conf_strip = punc_sep
@@ -140,13 +141,12 @@ def similar_references(docs, overlap_prop = 0.6, min_set_size = 4):
     # List for each reference of references which are similar
     similar = [[] for i in range(0, len(all_refs))]
     for cur_ind, current in enumerate(all_refs):
-        print("{}/{}".format(cur_ind, len(all_refs)))
-        print("--------------------------------------------------")
-        print(all_refs[cur_ind][0])
+        logger.debug("{}/{}".format(cur_ind, len(all_refs)))
+        logger.debug("--------------------------------------------------")
+        logger.debug(all_refs[cur_ind][0])
         cur_setlen = len(current[2])
         for other_ind, other in enumerate(all_refs):
             other_setlen = len(other[2])
-
             if cur_ind >= other_ind:
                 continue
 
@@ -167,6 +167,7 @@ def similar_references(docs, overlap_prop = 0.6, min_set_size = 4):
                     similar[cur_ind].append(other_ind)
                     similar[other_ind].append(cur_ind)
 
+                ref_same_slide(current[0], other[0])
 
     return all_refs, similar
 
@@ -180,11 +181,157 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
     if first == second:
         return True
 
-    print("\n--------------------------------------------------")
-    print("Arrays not equal:")
-    print(first)
-    print(second)
+    logger.debug("\n--------------------------------------------------")
+    logger.debug("Arrays not equal:")
+    logger.debug(first)
+    logger.debug(second)
+    logger.debug(common)
+    # Find the index of occurrences of common words in the two references,
+    # and use that information to get approximate extents of the title. If
+    # the title is the same, then the length of the list from earliest to
+    # latest occurrence of common words should be the same for both of the
+    # lists given
+    first_inds = []
+    second_inds = []
+    for word in common:
+        first_inds.append(first.index(word))
+        second_inds.append(second.index(word))
 
+    first_inds.sort()
+    second_inds.sort()
+    logger.debug("inds common first: {}".format(first_inds))
+    logger.debug("inds common second: {}".format(second_inds))
+
+    first_min = first_inds[0]
+    first_max = first_inds[-1]
+    second_min = second_inds[0]
+    second_max = second_inds[-1]
+ 
+    extent_first = first[first_min:first_max + 1]
+    extent_second = second[second_min:second_max + 1]
+    logger.debug("common extent list first: {}".format(extent_first))
+    logger.debug("common extent list second: {}".format(extent_second))
+
+    if extent_first == extent_second:
+        logger.debug("extents were the same")
+        return True
+
+    # If the extents are not equal, we should look at the indices and check to
+    # see if the extracted words are in a sequence or not, which should indicate
+    # where the title is and where there are words which we can consider to be
+    # clutter (i.e. in journal titles)
+    seq_first = [val for ind,val in enumerate(first_inds[:-1]) if abs(val - first_inds[ind+1]) <= sequence_skip]
+    seq_second = [val for ind,val in enumerate(second_inds[:-1]) if abs(val - second_inds[ind+1]) <= sequence_skip]
+    logger.debug(seq_first)
+    logger.debug(seq_second)
+
+    trimmed_extent_first = first[seq_first[0]:seq_first[-1]]
+    trimmed_extent_second = second[seq_second[0]:seq_second[-1]]
+
+    logger.debug(trimmed_extent_first)
+    logger.debug(trimmed_extent_second)
+    
+    # Maybe we got rid of some of the confounding stuff?
+    if trimmed_extent_first == trimmed_extent_second:
+        logger.debug("trimmed extents were the same")
+        return True
+
+    return False
+
+def similar_refs_slide(docs):
+    # If the intersection of the two sets is greater than this proportion of the
+    # length of the shorter set, the two references are considered similar
+
+    all_refs = []
+
+    for d in docs:
+        for r in d.references:
+            logger.debug("==================================================")
+            logger.debug("'{}'".format(r))
+            stripped = r.lower().strip()
+            stripped = str(unidecode.unidecode(unicode(stripped, 'utf8')))
+
+            conf_inds = []
+            for conf_str in conf_strings:
+                found_ind = stripped.find(conf_str)
+
+                if found_ind > 0:
+                    logger.debug("found conf string {} at ind {}".format(conf_str, found_ind))
+                    conf_inds.append(found_ind)
+
+            if not conf_inds:
+                logger.debug("found no conference strings")
+                conf_strip = stripped
+            else:
+                str_start = min(conf_inds)
+                last_dot = stripped.rfind(".", 0, str_start) + 1
+                last_comma = stripped.rfind(",", 0, str_start) + 1
+
+                conf_strip = stripped[:max(last_dot, last_comma)]
+                logger.debug("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
+                logger.debug("all after latest punctuation: {}".format(conf_strip))
+            
+            sep_inds, sep_inds_rev = punctuation_density_separate(conf_strip)
+            if not sep_inds: # if it's empty this is usually just a spurious reference
+                continue
+
+            # If there are two or fewer separation indices then the separation
+            # wasn't able to get good separation for authors, title and journal,
+            # so we don't change anything
+            if len(sep_inds) >= 2:
+                # if there are 3 or more sep inds, we want to get all the text in the middle part
+                punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-1]].strip()
+            else:
+                punc_sep = conf_strip
+
+            logger.debug("conf_strip: {}\npunc_sep: {}\n".format(conf_strip, punc_sep))
+
+            full_strip = punc_sep
+
+            ref_stopped = [word for word in full_strip.split(" ") if word not in stopwords and len(word) > 2]
+            ref_nopunc = " ".join(ref_stopped).translate(None, punctuation).split(" ")
+            ref_set = set(ref_stopped)
+            all_refs.append((r.strip(), ref_stopped, ref_nopunc, ref_set))
+
+    # List for each reference of references which are similar
+    similar = [[] for i in range(0, len(all_refs))]
+    for cur_ind, current in enumerate(all_refs):
+        logger.debug("{}/{}".format(cur_ind, len(all_refs)))
+        logger.debug("--------------------------------------------------")
+        logger.debug(all_refs[cur_ind][0])
+        cur_setlen = len(current[3])
+        for other_ind, other in enumerate(all_refs):
+            other_setlen = len(other[3])
+
+            if cur_ind >= other_ind:
+                continue
+
+            if cur_setlen == 0 or other_setlen == 0:
+                continue
+
+            max_count = min(cur_setlen, other_setlen)
+            common = current[3].intersection(other[3])
+            overlap = len(common)/float(max_count)
+
+            if overlap > 0.5:
+                # Look at the stopped lists of words extracted from the
+                # reference. This is quite a strict measure, doesn't consider
+                # possibility of stuff after the title being included
+                if ref_same_slide(current, other):
+                    similar[cur_ind].append(other_ind)
+                    similar[other_ind].append(cur_ind)
+
+
+    return all_refs, similar
+
+def ref_same_slide(first_ref, second_ref):
+    logger.debug("================================================== SLIDE")
+    # use the stripped strings with no punctuation to do the sliding comparison
+    first = first_ref[1]
+    second = second_ref[1]
+    logger.debug(first)
+    logger.debug(second)
+    
     scores = []
     # slide the first array along the second one to see if there is a
     # significant number of elements which are the same at some point
@@ -200,9 +347,9 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
         # end, and remove elements correspondingly from the start of the other
         # list to keep the list length the same
         trim = max(min(i-len(first), i-len(second)), 0)
-        # print("len first -i:{}".format(len(first) - i))
-        # print("len second -i:{}".format(len(second) - i))
-        # print("trimming {} from both".format(trim))
+        # logger.debug("len first -i:{}".format(len(first) - i))
+        # logger.debug("len second -i:{}".format(len(second) - i))
+        # logger.debug("trimming {} from both".format(trim))
         first_slice_end = -trim if trim > 0 else 0
         second_slice_start = trim if trim > 0 else 0
 
@@ -225,66 +372,30 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
         else:
             second_sliced = second_sliced[abs(len(first_sliced) - len(second_sliced)):]
 
-        # print("first slice len: {}, second slice len: {}".format(len(first_sliced), len(second_sliced)))
-        # print("first: {}".format(first_sliced))
-        # print("second: {}".format(second_sliced))
+        # logger.debug("first slice len: {}, second slice len: {}".format(len(first_sliced), len(second_sliced)))
+        # logger.debug("first: {}".format(first_sliced))
+        # logger.debug("second: {}".format(second_sliced))
 
         score = 0
+        match_inds = []
         for i, v in enumerate(first_sliced):
             if first_sliced[i] == second_sliced[i]:
                 score += 1
+                match_inds.append(i)
         scores.append(score)
 
-    print(scores)
-    
-    # Find the index of occurrences of common words in the two references,
-    # and use that information to get approximate extents of the title. If
-    # the title is the same, then the length of the list from earliest to
-    # latest occurrence of common words should be the same for both of the
-    # lists given
-    first_inds = []
-    second_inds = []
-    for word in common:
-        first_inds.append(first.index(word))
-        second_inds.append(second.index(word))
+        if score > 5:
+            logger.debug("score {}".format(score))
+            logger.debug("match inds: {}".format(match_inds))
+            logger.debug(first_sliced)
+            logger.debug(second_sliced)
 
-    first_inds.sort()
-    second_inds.sort()
-    print("inds common first: {}".format(first_inds))
-    print("inds common second: {}".format(second_inds))
-
-    first_min = first_inds[0]
-    first_max = first_inds[-1]
-    second_min = second_inds[0]
-    second_max = second_inds[-1]
- 
-    extent_first = first[first_min:first_max + 1]
-    extent_second = second[second_min:second_max + 1]
-    print("common extent list first: {}".format(extent_first))
-    print("common extent list second: {}".format(extent_second))
-
-    if extent_first == extent_second:
+    logger.debug(scores)
+    # Assume that most papers have titles longer than 4 words
+    if max(scores) > 4:
+        logger.debug("max score is above 4")
         return True
-
-    # If the extents are not equal, we should look at the indices and check to
-    # see if the extracted words are in a sequence or not, which should indicate
-    # where the title is and where there are words which we can consider to be
-    # clutter (i.e. in journal titles)
-    seq_first = [val for ind,val in enumerate(first_inds[:-1]) if abs(val - first_inds[ind+1]) <= sequence_skip]
-    seq_second = [val for ind,val in enumerate(second_inds[:-1]) if abs(val - second_inds[ind+1]) <= sequence_skip]
-    print(seq_first)
-    print(seq_second)
-
-    trimmed_extent_first = first[seq_first[0]:seq_first[-1]]
-    trimmed_extent_second = second[seq_second[0]:seq_second[-1]]
-
-    print(trimmed_extent_first)
-    print(trimmed_extent_second)
     
-    # Maybe we got rid of some of the confounding stuff?
-    if trimmed_extent_first == trimmed_extent_first:
-        return True
-
     return False
 
 def process_similar(all_refs, similar):
@@ -298,26 +409,30 @@ def process_similar(all_refs, similar):
         group = []
         to_process = [ind]
         while to_process:
-            # print("group: {}".format(group))
-            # print("to process {}".format(to_process))
+            print("group: {}".format(group))
+            print("to process {}".format(to_process))
 
             check_ind = to_process.pop(0)
             group.append(check_ind)
             new_group = similar[check_ind]
+            print("new group: {}".format(new_group))
             increase = len(new_group)/len(group)
             tp = set(to_process)
             ng = set(new_group)
-            overlap = tp.intersection(ng)
-            diff = tp.difference(ng)
+
+            overlap = ng.intersection(tp)
+            diff = ng.difference(tp)
             print("overlapping elements: {}, new elements: {}".format(len(overlap), len(diff)))
             print("new additions:")
             for i in diff:
                 print("{}".format(all_refs[i][0]))
 
-            group.extend(new_group)
+            # group.extend(new_group)
             for elem in new_group:
+                print("checking elem {}".format(elem))
                 if elem not in to_process and elem not in group:
-                    #to_process.append(elem)
+                    print("adding this element to processing array")
+                    to_process.append(elem)
                     pass
                     #print("element {} not in group, adding to to_process".format(elem))
                 else:
@@ -328,16 +443,19 @@ def process_similar(all_refs, similar):
         groups.append(group)
         processed.extend(group)
 
+    print("&&&&&&&&&&&&&&&&&&&& Final groups &&&&&&&&&&&&&&&&&&&&")
     groups = sorted(groups, key=lambda x: len(x))
     for group in groups:
         print("--------------------------------------------------")
-        print("group size: {}".format(len(group)))
+        print("group size: {}, members {}".format(len(group), group))
         for ref in group:
             print(all_refs[ref][0])
 
     print("Number of groups: {}".format(len(groups)))
 
-
+    for ref in all_refs:
+        print(ref[1])
+    
 
     # for ind, similar_arr in enumerate(similar):
     #     print("----------------------------------------")
@@ -348,6 +466,10 @@ def process_similar(all_refs, similar):
 
     #     if ind > 10:
     #         break
+
+def merge_groups(groups):
+    for group in groups:
+        pass
 
 def punctuation_density_separate(ref, sep_thresh=20):
     punctuation_inds = [ind for ind, char in enumerate(ref) if char in ',.']
@@ -380,32 +502,46 @@ def punctuation_density_separate(ref, sep_thresh=20):
 
             rev_ind = None
 
-    # print("--------------------------------------------------")
-    # print(ref)
-    # print("forwards: {}".format(sep_inds))
-    # print("reverse: {}".format(sep_inds_reverse))
-    # for ind, sep_ind in enumerate(sep_inds_reverse):
-    #     if ind == 0:
-    #         sep_str = ref[:sep_ind]
-    #     else:
-    #         # +1 so that we don't include the punctuation
-    #         sep_str = ref[sep_inds[ind-1]:sep_ind+1]
+    print("--------------------------------------------------")
+    print(ref)
+    print("forwards: {}".format(sep_inds))
+    print("reverse: {}".format(sep_inds_reverse))
+    for ind, sep_ind in enumerate(sep_inds_reverse):
+        if ind == 0:
+            sep_str = ref[:sep_ind]
+        else:
+            # +1 so that we don't include the punctuation
+            sep_str = ref[sep_inds[ind-1]:sep_ind+1]
+
+        logger.debug("punctuated section {}: {}".format(ind, sep_str))
 
     if sep_inds:
-        print(ref[sep_inds[0]:sep_inds_reverse[-1]])
+        logger.debug(ref[sep_inds[0]:sep_inds_reverse[-1]])
 
     return sep_inds, sep_inds_reverse
 
 def main():
-    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format='%(message)s')
+    parser = argparse.ArgumentParser(description="Get information about references from a set of papers")
+    parser.add_argument("--debug", action="store_true", help="run with debug logging on")
+    parser.add_argument("--refresh", "-f", action="store_true", help="refresh the processing rather than using saved data from pickle files")
+    parser.add_argument("files", nargs="+", type=str, help="text files containing text of papers")
+
+    args = parser.parse_args()
+
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(message)s')
+
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
 
     f_regex = FilenameRegex("(.*) - (.*) - (.*)", author_ind=1, year_ind=2, title_ind=3)
-    document_references = refgroup_from_filelist(sys.argv[1:], f_regex)
-
-    if not os.path.isfile("all_refs.pickle") or not os.path.isfile("similar.pickle"):
-        all_refs, similar = similar_references(document_references)
+    document_references = refgroup_from_filelist(args.files, f_regex)
+    
+    if args.refresh or not os.path.isfile("all_refs.pickle") or not os.path.isfile("similar.pickle"):
+        #all_refs, similar = similar_references(document_references)
+        all_refs, similar = similar_refs_slide(document_references)
         with open("all_refs.pickle", 'w') as f:
             pickle.dump(all_refs, f)
         with open("similar.pickle", 'w') as f:
@@ -415,15 +551,6 @@ def main():
             all_refs = pickle.load(f)
         with open("similar.pickle", 'r') as f:
             similar = pickle.load(f)
-
-    with open("all_refs_fullstrip.txt", 'w') as f:
-        for r in all_refs:
-            f.write("{}\n".format(r[5]))
-
-    with open("all_refs_stopped.txt", 'w') as f:
-        for r in all_refs:
-            f.write("{}\n".format(r[1]))
-
 
     process_similar(all_refs, similar)
 

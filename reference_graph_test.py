@@ -220,6 +220,18 @@ class TestArraySimilarityMethods(unittest.TestCase):
 
         self.assertTrue(arrays_contain_same_reference(first, second, common))
 
+    def test_both_sameauthor_difftitle_before(self):
+
+        first = paper_title_similar_pairs[0][0]
+        second = paper_title_similar_pairs[0][1]
+        authors = ["john", "baker", "jill", "smith", "bea", "zisserman"]
+        
+        first = authors + first
+        second = authors + second
+        common = set(first).intersection(set(second))
+
+        self.assertTrue(arrays_contain_same_reference(first, second, common))
+        
     def test_both_clutter_after(self):
         paper_ind = random.randint(0, len(paper_titles) - 1)
         junk_first_ind = random.randint(0, len(junk) - 1)
