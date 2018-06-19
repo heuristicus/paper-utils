@@ -17,7 +17,7 @@ stopwords = ['an', 'for', 'do', 'its', 'of', 'is', 'or', 'who', 'from', 'the', '
 term_stopwords = ['convolutional', 'neural', 'networks', 'semantic', 'segmentation', 'deep']
 
 # Strings which often come in the journal section of a reference
-conf_strings = ["proceedings", "conference", "journal", "transactions", "letters", "advances", "arxiv", " conf.", " proc.", "ieee", "international", "int.", "volume", "eccv", "icra", "cvpr", "iccv", " acm ", " in: ", "editors", " eds.", "ijcv"]
+conf_strings = ["proceedings", "conference", "journal", "transactions", "letters", "advances", "arxiv", " conf.", " proc.", "ieee", "international", "int.", " volume ", "eccv", "icra", "cvpr", "iccv", " acm ", " in: ", "editors", " eds.", "ijcv", "tech report", " plos ", "isprs", "annals", "springer", "elsevier", " vol. ", " ed. ", " ch. ", "macmillan", "dissertation", "technical report", "mcgraw-hill", "workshop", "aaai"]
 
 
 punctuation = ",.():;'\""
@@ -206,7 +206,7 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
     first_max = first_inds[-1]
     second_min = second_inds[0]
     second_max = second_inds[-1]
- 
+
     extent_first = first[first_min:first_max + 1]
     extent_second = second[second_min:second_max + 1]
     logger.debug("common extent list first: {}".format(extent_first))
@@ -230,7 +230,7 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
 
     logger.debug(trimmed_extent_first)
     logger.debug(trimmed_extent_second)
-    
+
     # Maybe we got rid of some of the confounding stuff?
     if trimmed_extent_first == trimmed_extent_second:
         logger.debug("trimmed extents were the same")
@@ -270,7 +270,7 @@ def similar_refs_slide(docs):
                 conf_strip = stripped[:max(last_dot, last_comma)]
                 logger.debug("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
                 logger.debug("all after latest punctuation: {}".format(conf_strip))
-            
+
             sep_inds, sep_inds_rev = punctuation_density_separate(conf_strip)
             if not sep_inds: # if it's empty this is usually just a spurious reference
                 continue
@@ -327,12 +327,18 @@ def similar_refs_slide(docs):
 def ref_same_slide(first_ref, second_ref):
     logger.debug("================================================== SLIDE")
     # use the stripped strings with no punctuation to do the sliding comparison
-    first = first_ref[1]
-    second = second_ref[1]
+    first = first_ref[2]
+    second = second_ref[2]
+
     logger.debug(first)
     logger.debug(second)
-    
+
+    if first == second:
+        logger.debug("Stopped refs without punctuation were the same")
+        return True
+
     scores = []
+    longest_run = 0
     # slide the first array along the second one to see if there is a
     # significant number of elements which are the same at some point
     for i in range(1, len(first) + len(second)):
@@ -355,7 +361,7 @@ def ref_same_slide(first_ref, second_ref):
 
         first_sliced = first[-i:first_slice_end or None]
         second_sliced = second[second_slice_start or None:i]
-        
+
         # Also need to consider overlap. If one list is longer than the other,
         # then there will be a point like the following:
         #
@@ -372,17 +378,32 @@ def ref_same_slide(first_ref, second_ref):
         else:
             second_sliced = second_sliced[abs(len(first_sliced) - len(second_sliced)):]
 
+        if first_sliced == second_sliced:
+            logger.debug("ARRAYS IDENTICAL")
+            print(first_sliced)
+            print(second_sliced)
+
         # logger.debug("first slice len: {}, second slice len: {}".format(len(first_sliced), len(second_sliced)))
         # logger.debug("first: {}".format(first_sliced))
         # logger.debug("second: {}".format(second_sliced))
 
         score = 0
         match_inds = []
+        run = 0
         for i, v in enumerate(first_sliced):
-            if first_sliced[i] == second_sliced[i]:
+            if first_sliced[i] == second_sliced[i] and first_sliced[i] not in term_stopwords:
                 score += 1
+                run +=1
+                if run > longest_run:
+                    longest_run = run
                 match_inds.append(i)
+            else:
+                if run > 0:
+                    run = 0
+
         scores.append(score)
+
+
 
         if score > 5:
             logger.debug("score {}".format(score))
@@ -390,12 +411,13 @@ def ref_same_slide(first_ref, second_ref):
             logger.debug(first_sliced)
             logger.debug(second_sliced)
 
+    logger.debug("longest run is {}".format(longest_run))
     logger.debug(scores)
     # Assume that most papers have titles longer than 4 words
-    if max(scores) > 4:
-        logger.debug("max score is above 4")
+    if max(scores) >= 4 and longest_run >= 4:
+        logger.debug("max score is geq 4")
         return True
-    
+
     return False
 
 def process_similar(all_refs, similar):
@@ -404,58 +426,58 @@ def process_similar(all_refs, similar):
     for ind, l in enumerate(similar):
         if ind in processed:
             continue
-        print("--------------------------------------------------")
-        print(all_refs[ind][0])
+        logger.debug("--------------------------------------------------")
+        logger.debug(all_refs[ind][0])
         group = []
         to_process = [ind]
         while to_process:
-            print("group: {}".format(group))
-            print("to process {}".format(to_process))
+            logger.debug("group: {}".format(group))
+            logger.debug("to process {}".format(to_process))
 
             check_ind = to_process.pop(0)
             group.append(check_ind)
             new_group = similar[check_ind]
-            print("new group: {}".format(new_group))
+            logger.debug("new group: {}".format(new_group))
             increase = len(new_group)/len(group)
             tp = set(to_process)
             ng = set(new_group)
 
             overlap = ng.intersection(tp)
             diff = ng.difference(tp)
-            print("overlapping elements: {}, new elements: {}".format(len(overlap), len(diff)))
-            print("new additions:")
+            logger.debug("overlapping elements: {}, new elements: {}".format(len(overlap), len(diff)))
+            logger.debug("new additions:")
             for i in diff:
-                print("{}".format(all_refs[i][0]))
+                logger.debug("{}".format(all_refs[i][0]))
 
             # group.extend(new_group)
             for elem in new_group:
-                print("checking elem {}".format(elem))
+                logger.debug("checking elem {}".format(elem))
                 if elem not in to_process and elem not in group:
-                    print("adding this element to processing array")
+                    logger.debug("adding this element to processing array")
                     to_process.append(elem)
                     pass
-                    #print("element {} not in group, adding to to_process".format(elem))
+                    #logger.debug("element {} not in group, adding to to_process".format(elem))
                 else:
                     pass
-                    #print("element {} was already processed, or in the list to be processed.".format(elem))
-        print("final group size {}".format(len(group)))
+                    #logger.debug("element {} was already processed, or in the list to be processed.".format(elem))
+        logger.debug("final group size {}".format(len(group)))
 
         groups.append(group)
         processed.extend(group)
 
-    print("&&&&&&&&&&&&&&&&&&&& Final groups &&&&&&&&&&&&&&&&&&&&")
+    logger.info("&&&&&&&&&&&&&&&&&&&& Final groups &&&&&&&&&&&&&&&&&&&&")
     groups = sorted(groups, key=lambda x: len(x))
     for group in groups:
-        print("--------------------------------------------------")
-        print("group size: {}, members {}".format(len(group), group))
+        logger.info("--------------------------------------------------")
+        logger.info("group size: {}, members {}".format(len(group), group))
         for ref in group:
-            print(all_refs[ref][0])
+            logger.info(all_refs[ref][0])
 
-    print("Number of groups: {}".format(len(groups)))
+    logger.info("Number of groups: {}".format(len(groups)))
 
     for ref in all_refs:
-        print(ref[1])
-    
+        logger.info(ref[1])
+
 
     # for ind, similar_arr in enumerate(similar):
     #     print("----------------------------------------")
@@ -538,7 +560,7 @@ def main():
 
     f_regex = FilenameRegex("(.*) - (.*) - (.*)", author_ind=1, year_ind=2, title_ind=3)
     document_references = refgroup_from_filelist(args.files, f_regex)
-    
+
     if args.refresh or not os.path.isfile("all_refs.pickle") or not os.path.isfile("similar.pickle"):
         #all_refs, similar = similar_references(document_references)
         all_refs, similar = similar_refs_slide(document_references)
