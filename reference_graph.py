@@ -263,13 +263,23 @@ def similar_refs_slide(docs):
                 logger.debug("found no conference strings")
                 conf_strip = stripped
             else:
-                str_start = min(conf_inds)
-                last_dot = stripped.rfind(".", 0, str_start) + 1
-                last_comma = stripped.rfind(",", 0, str_start) + 1
+                # Only consider conference strings in the second half of the reference.
+                str_start = 0
+                for ind in conf_inds:
+                    if ind > len(stripped)/2:
+                        str_start = ind
 
-                conf_strip = stripped[:max(last_dot, last_comma)]
-                logger.debug("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
-                logger.debug("all after latest punctuation: {}".format(conf_strip))
+
+                if str_start == 0:
+                    logger.debug("No conf string found in the first half of the given reference")
+                    conf_strip = stripped
+                else:
+                    last_dot = stripped.rfind(".", 0, str_start) + 1
+                    last_comma = stripped.rfind(",", 0, str_start) + 1
+
+                    conf_strip = stripped[:max(last_dot, last_comma)]
+                    logger.debug("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
+                    logger.debug("all after latest punctuation: {}".format(conf_strip))
 
             sep_inds, sep_inds_rev = punctuation_density_separate(conf_strip)
             if not sep_inds: # if it's empty this is usually just a spurious reference
@@ -317,10 +327,10 @@ def similar_refs_slide(docs):
                 # Look at the stopped lists of words extracted from the
                 # reference. This is quite a strict measure, doesn't consider
                 # possibility of stuff after the title being included
+                logger.debug("Comparing with ref id {}".format(other_ind))
                 if ref_same_slide(current, other):
                     similar[cur_ind].append(other_ind)
                     similar[other_ind].append(cur_ind)
-
 
     return all_refs, similar
 
@@ -378,10 +388,9 @@ def ref_same_slide(first_ref, second_ref):
         else:
             second_sliced = second_sliced[abs(len(first_sliced) - len(second_sliced)):]
 
-        if first_sliced == second_sliced:
-            logger.debug("ARRAYS IDENTICAL")
-            print(first_sliced)
-            print(second_sliced)
+        if first_sliced == second_sliced and len(first_sliced) > 4:
+            logger.debug("Sliced arrays were >4 length and identical")
+            return True
 
         # logger.debug("first slice len: {}, second slice len: {}".format(len(first_sliced), len(second_sliced)))
         # logger.debug("first: {}".format(first_sliced))
