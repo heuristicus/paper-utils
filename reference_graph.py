@@ -502,6 +502,8 @@ def process_similar(all_refs, similar):
     #     if ind > 10:
     #         break
 
+    return groups
+
 def merge_groups(groups):
     for group in groups:
         pass
@@ -563,6 +565,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="run with debug logging on")
     parser.add_argument("--refresh", "-f", action="store_true", help="refresh the processing rather than using saved data from pickle files")
     parser.add_argument("files", nargs="+", type=str, help="text files containing text of papers")
+    parser.add_argument("-q", "--query", type=str, help="query the references in a specific paper to see how many times each reference was cited in the set of documents")
 
     args = parser.parse_args()
 
@@ -580,17 +583,27 @@ def main():
     if args.refresh or not os.path.isfile("all_refs.pickle") or not os.path.isfile("similar.pickle"):
         #all_refs, similar = similar_references(document_references)
         all_refs, similar = similar_refs_slide(document_references)
+        groups = process_similar(all_refs, similar)
         with open("all_refs.pickle", 'w') as f:
             pickle.dump(all_refs, f)
         with open("similar.pickle", 'w') as f:
             pickle.dump(similar, f)
+        with open("similar_groups.pickle", 'w') as f:
+            pickle.dump(groups, f)
     else:
         with open("all_refs.pickle", 'r') as f:
             all_refs = pickle.load(f)
         with open("similar.pickle", 'r') as f:
             similar = pickle.load(f)
+        with open("similar_groups.pickle", 'r') as f:
+            groups = pickle.load(f)
 
-    process_similar(all_refs, similar)
+    if args.query:
+        print("querying")
+        doc_refs = ReferenceGroup(args.query, f_regex)
+        for ref in doc_refs.references:
+            print ref
+        
 
 if __name__ == '__main__':
     main()
