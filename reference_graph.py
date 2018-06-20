@@ -271,7 +271,7 @@ def similar_refs_slide(docs):
 
 
                 if str_start == 0:
-                    logger.debug("No conf string found in the first half of the given reference")
+                    logger.debug("No conf string found in the second half of the given reference")
                     conf_strip = stripped
                 else:
                     last_dot = stripped.rfind(".", 0, str_start) + 1
@@ -288,8 +288,10 @@ def similar_refs_slide(docs):
             # If there are two or fewer separation indices then the separation
             # wasn't able to get good separation for authors, title and journal,
             # so we don't change anything
-            if len(sep_inds) >= 2:
+            if len(sep_inds) > 2:
                 # if there are 3 or more sep inds, we want to get all the text in the middle part
+                punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-2]].strip()
+            elif len(sep_inds) == 2:
                 punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-1]].strip()
             else:
                 punc_sep = conf_strip
@@ -389,6 +391,8 @@ def ref_same_slide(first_ref, second_ref):
             second_sliced = second_sliced[abs(len(first_sliced) - len(second_sliced)):]
 
         if first_sliced == second_sliced and len(first_sliced) > 4:
+            print(first_sliced)
+            print(second_sliced)
             logger.debug("Sliced arrays were >4 length and identical")
             return True
 
@@ -414,7 +418,7 @@ def ref_same_slide(first_ref, second_ref):
 
 
 
-        if score > 5:
+        if score >= 4 and run >= 4:
             logger.debug("score {}".format(score))
             logger.debug("match inds: {}".format(match_inds))
             logger.debug(first_sliced)
@@ -484,8 +488,8 @@ def process_similar(all_refs, similar):
 
     logger.info("Number of groups: {}".format(len(groups)))
 
-    for ref in all_refs:
-        logger.info(ref[1])
+    # for ref in all_refs:
+    #     logger.info(ref[1])
 
 
     # for ind, similar_arr in enumerate(similar):
@@ -539,12 +543,15 @@ def punctuation_density_separate(ref, sep_thresh=20):
     print("reverse: {}".format(sep_inds_reverse))
     for ind, sep_ind in enumerate(sep_inds_reverse):
         if ind == 0:
-            sep_str = ref[:sep_ind]
+            sep_str_rev = ref[:sep_ind]
+            sep_str_fwd = ref[:sep_inds[ind]]
         else:
             # +1 so that we don't include the punctuation
-            sep_str = ref[sep_inds[ind-1]:sep_ind+1]
+            sep_str_rev = ref[sep_inds_reverse[ind-1]:sep_ind+1]
+            sep_str_fwd = ref[sep_inds[ind-1]:sep_inds[ind]+1]
 
-        logger.debug("punctuated section {}: {}".format(ind, sep_str))
+        logger.debug("punctuated section forward {}: {}".format(ind, sep_str_fwd))
+        logger.debug("punctuated section reverse {}: {}".format(ind, sep_str_rev))
 
     if sep_inds:
         logger.debug(ref[sep_inds[0]:sep_inds_reverse[-1]])
