@@ -90,7 +90,18 @@ def match_reference_to_title(docs):
 
 #    logger.debug(sorted(graph.in_degree(with_labels=True).items(), key=operator.itemgetter(1)))
 
-def similar_references(docs, overlap_prop = 0.6, min_set_size = 4):
+def find_similar_references(docs, overlap_prop = 0.5, min_set_size = 1, slide=True):
+    """overlap prop sets the threshold on how much commonality there must be between
+    the words in two references being compared to consider them to be similar
+    enough to go to the next stage of processing
+
+    min set size is the minimum number of unique words in the processed
+    reference to allow it to go to the next stage of processing
+
+    slide defines whether to use the sliding comparion or the array comparison
+    (if false)
+
+    """
     # If the intersection of the two sets is greater than this proportion of the
     # length of the shorter set, the two references are considered similar
 
@@ -98,76 +109,54 @@ def similar_references(docs, overlap_prop = 0.6, min_set_size = 4):
 
     for d in docs:
         for r in d.references:
-            stripped = r.lower().strip()
-            stripped = str(unidecode.unidecode(unicode(stripped, 'utf8')))
+            ref_tuple = process_reference(r)
 
-            sep_inds, sep_inds_rev = punctuation_density_separate(stripped)
-            if not sep_inds:
-                continue
+            # some references will be invalid due to imperfect processing
+            if ref_tuple:
+                all_refs.append(ref_tuple)
 
-            punc_sep = stripped[sep_inds[0]:sep_inds_rev[-1]].strip()
-
-            conf_inds = []
-            for conf_str in conf_strings:
-                found_ind = punc_sep.find(conf_str)
-                # print("found conf string {} at ind {}".format(conf_str, found_ind))
-                if found_ind > 0:
-                    conf_inds.append(found_ind)
-
-            logger.debug(conf_inds)
-            if not conf_inds:
-                # print("found no conference strings")
-                conf_strip = punc_sep
-            else:
-                str_start = min(conf_inds)
-                last_dot = punc_sep.rfind(".", 0, str_start)
-                last_comma = punc_sep.rfind(",", 0, str_start)
-
-                # print("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
-                # print("all after latest punctuation: {}".format(punc_sep[max(last_dot, last_comma):]))
-                conf_strip = punc_sep[:max(last_dot, last_comma)]
-
-            full_strip = conf_strip
-
-            # print("conf_strip: {}\nfull strip: {}".format(conf_strip, full_strip))
-
-            ref_trimmed = full_strip.lower().translate(None, punctuation)
-            ref_stopped = [word for word in ref_trimmed.split(" ") if word not in stopwords and len(word) > 2]
-            ref_set = set(ref_stopped)
-            all_refs.append((r.strip(), ref_stopped, ref_set, d.short_name(), punc_sep, full_strip))
-
-
-
-    # List for each reference of references which are similar
+    # Each reference has a list of references which are similar
     similar = [[] for i in range(0, len(all_refs))]
     for cur_ind, current in enumerate(all_refs):
         logger.debug("{}/{}".format(cur_ind, len(all_refs)))
         logger.debug("--------------------------------------------------")
         logger.debug(all_refs[cur_ind][0])
-        cur_setlen = len(current[2])
+        cur_setlen = len(current[3])
         for other_ind, other in enumerate(all_refs):
-            other_setlen = len(other[2])
+            other_setlen = len(other[3])
+
+            # ignore references which have been seen previously - similarity
+            # should be two-way and so the previous refs should already have
+            # been assigned similarity with all the others
             if cur_ind >= other_ind:
                 continue
 
+            # Don't process if one of the sets is too short
             if cur_setlen <= min_set_size or other_setlen <= min_set_size:
                 continue
 
+            # The overlap value is what proportion of words in the sets are the
+            # same, relative to the shortest set
             max_count = min(cur_setlen, other_setlen)
-            common = current[2].intersection(other[2])
+            common = current[3].intersection(other[3])
             overlap = len(common)/float(max_count)
 
+            # Only do further processing if the overlap is over a threshold -
+            # don't want to compare things which have no chance of being the
+            # same. This might filter some references if they are badly
+            # pre-processed
             if overlap > overlap_prop:
-                # Look at the stopped lists of words extracted from the
-                # reference. This is quite a strict measure, doesn't consider
-                # possibility of stuff after the title being included
-                c_list = all_refs[cur_ind][1]
-                o_list = all_refs[other_ind][1]
-                if arrays_contain_same_reference(c_list, o_list, common):
+                logger.debug("Comparing with ref id {}".format(other_ind))
+
+                # Not sure if it's possible to have a single condition for
+                # this... a simple or doesn't work
+                if slide and ref_same_slide(current, other):
                     similar[cur_ind].append(other_ind)
                     similar[other_ind].append(cur_ind)
 
-                ref_same_slide(current[0], other[0])
+                if not slide and arrays_contain_same_reference(current, other):
+                    similar[cur_ind].append(other_ind)
+                    similar[other_ind].append(cur_ind)
 
     return all_refs, similar
 
@@ -230,7 +219,6 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
 
     logger.debug(trimmed_extent_first)
     logger.debug(trimmed_extent_second)
-
     # Maybe we got rid of some of the confounding stuff?
     if trimmed_extent_first == trimmed_extent_second:
         logger.debug("trimmed extents were the same")
@@ -238,103 +226,79 @@ def arrays_contain_same_reference(first, second, common, sequence_skip=2):
 
     return False
 
-def similar_refs_slide(docs):
-    # If the intersection of the two sets is greater than this proportion of the
-    # length of the shorter set, the two references are considered similar
+def process_reference(ref):
+    """Process a reference and get a tuple containing various versions of the
+    reference which have been trimmed in some way
 
-    all_refs = []
+    First index is just the reference as it is
 
-    for d in docs:
-        for r in d.references:
-            logger.debug("==================================================")
-            logger.debug("'{}'".format(r))
-            stripped = r.lower().strip()
-            stripped = str(unidecode.unidecode(unicode(stripped, 'utf8')))
+    Second index is the reference with attempts to remove conference and author
+    information so just the title is left, as well as  stopwords removed
 
-            conf_inds = []
-            for conf_str in conf_strings:
-                found_ind = stripped.find(conf_str)
+    Third is the same as above, without punctuation
 
-                if found_ind > 0:
-                    logger.debug("found conf string {} at ind {}".format(conf_str, found_ind))
-                    conf_inds.append(found_ind)
+    Final is a set created from the second index
 
-            if not conf_inds:
-                logger.debug("found no conference strings")
-                conf_strip = stripped
-            else:
-                # Only consider conference strings in the second half of the reference.
-                str_start = 0
-                for ind in conf_inds:
-                    if ind > len(stripped)/2:
-                        str_start = ind
+    """
+    logger.debug("==================================================")
+    logger.debug("'{}'".format(ref))
+    stripped = ref.lower().strip()
+    stripped = str(unidecode.unidecode(unicode(stripped, 'utf8')))
+
+    conf_inds = []
+    for conf_str in conf_strings:
+        found_ind = stripped.find(conf_str)
+
+        if found_ind > 0:
+            logger.debug("found conf string {} at ind {}".format(conf_str, found_ind))
+            conf_inds.append(found_ind)
+
+    if not conf_inds:
+        logger.debug("found no conference strings")
+        conf_strip = stripped
+    else:
+        # Only consider conference strings in the second half of the reference.
+        str_start = 0
+        for ind in conf_inds:
+            if ind > len(stripped)/2:
+                str_start = ind
 
 
-                if str_start == 0:
-                    logger.debug("No conf string found in the second half of the given reference")
-                    conf_strip = stripped
-                else:
-                    last_dot = stripped.rfind(".", 0, str_start) + 1
-                    last_comma = stripped.rfind(",", 0, str_start) + 1
+        if str_start == 0:
+            logger.debug("No conf string found in the second half of the given reference")
+            conf_strip = stripped
+        else:
+            last_dot = stripped.rfind(".", 0, str_start) + 1
+            last_comma = stripped.rfind(",", 0, str_start) + 1
 
-                    conf_strip = stripped[:max(last_dot, last_comma)]
-                    logger.debug("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
-                    logger.debug("all after latest punctuation: {}".format(conf_strip))
+            conf_strip = stripped[:max(last_dot, last_comma)]
+            logger.debug("conf string started at {}, last dot at {}, last comma at {}".format(str_start, last_dot, last_comma))
+            logger.debug("all after latest punctuation: {}".format(conf_strip))
 
-            sep_inds, sep_inds_rev = punctuation_density_separate(conf_strip)
-            if not sep_inds: # if it's empty this is usually just a spurious reference
-                continue
+    sep_inds, sep_inds_rev = punctuation_density_separate(conf_strip)
+    if not sep_inds: # if it's empty this is usually just a spurious reference
+        return ()
 
-            # If there are two or fewer separation indices then the separation
-            # wasn't able to get good separation for authors, title and journal,
-            # so we don't change anything
-            if len(sep_inds) > 2:
-                # if there are 3 or more sep inds, we want to get all the text in the middle part
-                punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-2]].strip()
-            elif len(sep_inds) == 2:
-                punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-1]].strip()
-            else:
-                punc_sep = conf_strip
+    # If there are two or fewer separation indices then the separation
+    # wasn't able to get good separation for authors, title and journal,
+    # so we don't change anything
+    if len(sep_inds) > 2:
+        # if there are 3 or more sep inds, we want to get all the text in the middle part
+        punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-2]].strip()
+    elif len(sep_inds) == 2:
+        punc_sep = conf_strip[sep_inds[0]:sep_inds_rev[-1]].strip()
+    else:
+        punc_sep = conf_strip
 
-            logger.debug("conf_strip: {}\npunc_sep: {}\n".format(conf_strip, punc_sep))
+    logger.debug("conf_strip: {}\npunc_sep: {}\n".format(conf_strip, punc_sep))
 
-            full_strip = punc_sep
+    full_strip = punc_sep
 
-            ref_stopped = [word for word in full_strip.split(" ") if word not in stopwords and len(word) > 2]
-            ref_nopunc = " ".join(ref_stopped).translate(None, punctuation).split(" ")
-            ref_set = set(ref_stopped)
-            all_refs.append((r.strip(), ref_stopped, ref_nopunc, ref_set))
+    ref_stopped = [word for word in full_strip.split(" ") if word not in stopwords and len(word) > 2]
+    ref_nopunc = " ".join(ref_stopped).translate(None, punctuation).split(" ")
+    ref_set = set(ref_nopunc)
+    return (ref.strip(), ref_stopped, ref_nopunc, ref_set)
 
-    # List for each reference of references which are similar
-    similar = [[] for i in range(0, len(all_refs))]
-    for cur_ind, current in enumerate(all_refs):
-        logger.debug("{}/{}".format(cur_ind, len(all_refs)))
-        logger.debug("--------------------------------------------------")
-        logger.debug(all_refs[cur_ind][0])
-        cur_setlen = len(current[3])
-        for other_ind, other in enumerate(all_refs):
-            other_setlen = len(other[3])
-
-            if cur_ind >= other_ind:
-                continue
-
-            if cur_setlen == 0 or other_setlen == 0:
-                continue
-
-            max_count = min(cur_setlen, other_setlen)
-            common = current[3].intersection(other[3])
-            overlap = len(common)/float(max_count)
-
-            if overlap > 0.5:
-                # Look at the stopped lists of words extracted from the
-                # reference. This is quite a strict measure, doesn't consider
-                # possibility of stuff after the title being included
-                logger.debug("Comparing with ref id {}".format(other_ind))
-                if ref_same_slide(current, other):
-                    similar[cur_ind].append(other_ind)
-                    similar[other_ind].append(cur_ind)
-
-    return all_refs, similar
 
 def ref_same_slide(first_ref, second_ref):
     logger.debug("================================================== SLIDE")
@@ -416,8 +380,6 @@ def ref_same_slide(first_ref, second_ref):
 
         scores.append(score)
 
-
-
         if score >= 4 and run >= 4:
             logger.debug("score {}".format(score))
             logger.debug("match inds: {}".format(match_inds))
@@ -433,7 +395,7 @@ def ref_same_slide(first_ref, second_ref):
 
     return False
 
-def process_similar(all_refs, similar):
+def group_similar_refs(all_refs, similar):
     groups = []
     processed = []
     for ind, l in enumerate(similar):
@@ -581,9 +543,8 @@ def main():
     document_references = refgroup_from_filelist(args.files, f_regex)
 
     if args.refresh or not os.path.isfile("all_refs.pickle") or not os.path.isfile("similar.pickle"):
-        #all_refs, similar = similar_references(document_references)
-        all_refs, similar = similar_refs_slide(document_references)
-        groups = process_similar(all_refs, similar)
+        all_refs, similar = find_similar_references(document_references)
+        groups = group_similar_refs(all_refs, similar)
         with open("all_refs.pickle", 'w') as f:
             pickle.dump(all_refs, f)
         with open("similar.pickle", 'w') as f:
@@ -603,7 +564,7 @@ def main():
         doc_refs = ReferenceGroup(args.query, f_regex)
         for ref in doc_refs.references:
             print ref
-        
+
 
 if __name__ == '__main__':
     main()
